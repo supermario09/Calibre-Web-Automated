@@ -523,10 +523,10 @@
                                         {% endif %}
                                     {% endif %}
                                     {% endif %}
-                                    {% if current_user.wireless_device_ip and entry.download_list %}
+                                    {% if current_user.wireless_device_ip and entry.data|length %}
                                         <button id="sendWirelessBtn" type="button" class="btn btn-success action-icon-btn"
                                             data-book-id="{{ entry.id }}"
-                                            data-book-format="{{ entry.download_list[0].format }}"
+                                            data-book-format="{{ entry.data[0].format }}"
                                             title="{{ _('Send to Device (WiFi)') }}" aria-label="{{ _('Send to Device (WiFi)') }}">
                                             <span class="glyphicon glyphicon-phone"></span>
                                         </button>
