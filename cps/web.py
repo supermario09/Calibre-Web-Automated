@@ -2041,20 +2041,27 @@ def send_wireless(book_id, book_format):
                 if not chunk:
                     break
                 ws.send_binary(chunk)
-                msg = ws.recv()
-                if msg.startswith("DONE") or msg.startswith("ERROR"):
-                    result = msg
+                try:
+                    msg = ws.recv()
+                    if msg.startswith("DONE") or msg.startswith("ERROR"):
+                        result = msg
+                        break
+                    # PROGRESS update — keep sending chunks
+                except Exception:
+                    # X4 sends WebSocket CLOSE frame after final chunk
+                    # instead of a text DONE message — treat as success
+                    result = "DONE"
                     break
-                # msg is a PROGRESS update — keep sending chunks
 
-        # For multi-chunk files, DONE comes after the last PROGRESS
         if result is None:
             try:
                 result = ws.recv()
             except Exception:
-                # Small files: PROGRESS was the last message, treat as success
                 result = "DONE"
-        ws.close()
+        try:
+            ws.close()
+        except Exception:
+            pass
 
         if result and result.startswith("DONE"):
             ub.update_download(book_id, int(current_user.id))
