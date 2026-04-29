@@ -1998,6 +1998,7 @@ def send_wireless(book_id, book_format):
     import requests as http_requests
 
     device_ip = getattr(current_user, 'wireless_device_ip', '').strip()
+    device_ip = device_ip.removeprefix('http://').removeprefix('https://').rstrip('/')
     if not device_ip:
         response = [{'type': "danger", 'message': _("No wireless device IP configured. Please update your profile.")}]
         return Response(json.dumps(response), mimetype='application/json')
