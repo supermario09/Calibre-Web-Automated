@@ -2033,17 +2033,24 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
+        result = None
         with open(book_file_path, 'rb') as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 ws.send_binary(chunk)
+                # Drain progress messages the device sends after each chunk
+                msg = ws.recv()
+                if msg.startswith("DONE") or msg.startswith("ERROR"):
+                    result = msg
+                    break
 
-        result = ws.recv()
+        if result is None:
+            result = ws.recv()
         ws.close()
 
-        if result == "DONE":
+        if result and result.startswith("DONE"):
             ub.update_download(book_id, int(current_user.id))
             response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
         else:
