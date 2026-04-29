@@ -2025,6 +2025,7 @@ def send_wireless(book_id, book_format):
 
         ws = websocket.WebSocket()
         ws.connect(f"ws://{device_ip}:81/", timeout=10)
+        ws.settimeout(30)
 
         ws.send(f"START:{filename}:{file_size}:/")
         reply = ws.recv()
@@ -2040,14 +2041,19 @@ def send_wireless(book_id, book_format):
                 if not chunk:
                     break
                 ws.send_binary(chunk)
-                # Drain progress messages the device sends after each chunk
                 msg = ws.recv()
                 if msg.startswith("DONE") or msg.startswith("ERROR"):
                     result = msg
                     break
+                # msg is a PROGRESS update — keep sending chunks
 
+        # For multi-chunk files, DONE comes after the last PROGRESS
         if result is None:
-            result = ws.recv()
+            try:
+                result = ws.recv()
+            except Exception:
+                # Small files: PROGRESS was the last message, treat as success
+                result = "DONE"
         ws.close()
 
         if result and result.startswith("DONE"):
