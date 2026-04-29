@@ -212,6 +212,12 @@
       <h4 class="settings-section-header">{{_('eReader Configuration')}}</h4>
       
       <div class="form-group">
+        <label for="wireless_device_ip">{{_('Wireless Device IP / Hostname')}}</label>
+        <input type="text" class="form-control" name="wireless_device_ip" id="wireless_device_ip" value="{{ content.wireless_device_ip if content.wireless_device_ip != None }}" placeholder="e.g. 192.168.1.50 or crosspoint.local">
+        <p class="cwa-settings-tip">{{_('Local IP address or hostname of your wireless e-reader (Xteink X4, KOReader device, etc.) when in File Transfer mode. Enables the Send to Device button on book pages.')}}</p>
+      </div>
+
+      <div class="form-group">
         <label for="kindle_mail">{{_('Send to eReader Email Address')}}</label>
         <input type="email" class="form-control" name="kindle_mail" id="kindle_mail" value="{{ content.kindle_mail if content.kindle_mail != None }}" placeholder="{{_('Use comma to separate multiple addresses')}}">
         <p class="cwa-settings-tip">{{_('Email address(es) for your eReader devices. Separate multiple addresses with commas.')}}</p>

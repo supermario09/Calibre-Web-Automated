@@ -523,6 +523,14 @@
                                         {% endif %}
                                     {% endif %}
                                     {% endif %}
+                                    {% if current_user.wireless_device_ip and entry.download_list %}
+                                        <button id="sendWirelessBtn" type="button" class="btn btn-success action-icon-btn"
+                                            data-book-id="{{ entry.id }}"
+                                            data-book-format="{{ entry.download_list[0].format }}"
+                                            title="{{ _('Send to Device (WiFi)') }}" aria-label="{{ _('Send to Device (WiFi)') }}">
+                                            <span class="glyphicon glyphicon-phone"></span>
+                                        </button>
+                                    {% endif %}
                                     {% if entry.reader_list and current_user.role_viewer() %}
                                         <a target="_blank"
                                            href="{{ url_for('web.read_book', book_id=entry.id, book_format=entry.reader_list[0]) }}"
@@ -1345,6 +1353,28 @@
                     cancelEdit();
                 }
             });
+        });
+    });
+
+    // Send to Device (WiFi)
+    $("#sendWirelessBtn").on("click", function () {
+        var bookId = $(this).data("book-id");
+        var bookFormat = $(this).data("book-format");
+        var btn = $(this);
+        btn.prop("disabled", true);
+        $.ajax({
+            method: "POST",
+            url: "/send_wireless/" + bookId + "/" + bookFormat,
+            success: function (data) {
+                if (data && data[0]) {
+                    showActionToast(data[0].message, btn[0]);
+                }
+                btn.prop("disabled", false);
+            },
+            error: function () {
+                showActionToast("{{ _('Failed to connect to wireless device') }}", btn[0]);
+                btn.prop("disabled", false);
+            }
         });
     });
 </script>

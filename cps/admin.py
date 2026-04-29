@@ -2793,6 +2793,7 @@ def _handle_edit_user(to_save, content, languages, translations, kobo_support):
             content.kindle_mail = valid_email(to_save["kindle_mail"]) if to_save["kindle_mail"] else ""
         if to_save.get("kindle_mail_subject") is not None:
             content.kindle_mail_subject = (to_save.get("kindle_mail_subject", "") or "").strip()
+        content.wireless_device_ip = (to_save.get("wireless_device_ip", "") or "").strip()
 
     except Exception as ex:
         log.error(ex)

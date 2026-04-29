@@ -1991,6 +1991,53 @@ def send_to_ereader(book_id, book_format, convert):
     return Response(json.dumps(response), mimetype='application/json')
 
 
+@web.route('/send_wireless/<int:book_id>/<book_format>', methods=["POST"])
+@login_required_if_no_ano
+@download_required
+def send_wireless(book_id, book_format):
+    import requests as http_requests
+
+    device_ip = getattr(current_user, 'wireless_device_ip', '').strip()
+    if not device_ip:
+        response = [{'type': "danger", 'message': _("No wireless device IP configured. Please update your profile.")}]
+        return Response(json.dumps(response), mimetype='application/json')
+
+    book = calibre_db.get_book(book_id)
+    if not book:
+        response = [{'type': "danger", 'message': _("Book not found.")}]
+        return Response(json.dumps(response), mimetype='application/json')
+
+    book_data = calibre_db.get_book_format(book_id, book_format.upper())
+    if not book_data:
+        response = [{'type': "danger", 'message': _("Book format %(fmt)s not found.", fmt=book_format.upper())}]
+        return Response(json.dumps(response), mimetype='application/json')
+
+    book_file_path = os.path.join(config.get_book_path(), book.path, book_data.name + "." + book_format.lower())
+    if not os.path.exists(book_file_path):
+        response = [{'type': "danger", 'message': _("Book file not found on disk.")}]
+        return Response(json.dumps(response), mimetype='application/json')
+
+    try:
+        upload_url = f"http://{device_ip}/upload?path=/"
+        filename = book_data.name + "." + book_format.lower()
+        with open(book_file_path, 'rb') as f:
+            resp = http_requests.post(
+                upload_url,
+                files={'file': (filename, f, 'application/octet-stream')},
+                timeout=30
+            )
+        if resp.status_code in (200, 201):
+            ub.update_download(book_id, int(current_user.id))
+            response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+        else:
+            response = [{'type': "danger", 'message': _("Device returned error: %(status)s", status=resp.status_code)}]
+    except Exception as e:
+        log.error("Failed to send book wirelessly: %s", e)
+        response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
+
+    return Response(json.dumps(response), mimetype='application/json')
+
+
 @web.route('/send_selected/<int:book_id>', methods=["POST"])
 @login_required_if_no_ano
 @download_required
@@ -2408,6 +2455,7 @@ def change_profile(kobo_support, hardcover_support, local_oauth_check, oauth_sta
             current_user.kindle_mail = valid_email(to_save.get("kindle_mail"))
         if to_save.get("kindle_mail_subject", current_user.kindle_mail_subject) != current_user.kindle_mail_subject:
             current_user.kindle_mail_subject = strip_whitespaces(to_save.get("kindle_mail_subject", "")) or ""
+        current_user.wireless_device_ip = strip_whitespaces(to_save.get("wireless_device_ip", "")) or ""
         new_email = valid_email(to_save.get("email", current_user.email))
         if not new_email:
             raise Exception(_("Email can't be empty and has to be a valid Email"))

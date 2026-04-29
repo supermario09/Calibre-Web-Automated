@@ -287,6 +287,8 @@ class User(UserBase, Base):
     auto_send_enabled = Column(Boolean, default=False)
     # Allow entering additional email addresses on send-to-eReader
     allow_additional_ereader_emails = Column(Boolean, default=True)
+    # Wireless e-reader device IP or hostname for direct WiFi book delivery (Xteink X4, KOReader, etc.)
+    wireless_device_ip = Column(String(256), default="")
 
 
 if oauth_support:
@@ -893,6 +895,22 @@ def migrate_user_table(engine, _session):
     except exc.OperationalError:
         _safe_session_rollback(_session, "user.kindle_mail_subject")
         _run_ddl_with_retry(engine, "ALTER TABLE user ADD column 'kindle_mail_subject' String DEFAULT ''")
+
+    # Migration for wireless device IP field
+    try:
+        _session.query(exists().where(User.wireless_device_ip)).scalar()
+        _session.commit()
+    except exc.OperationalError:
+        _safe_session_rollback(_session, "user.wireless_device_ip")
+        try:
+            _run_ddl_with_retry(engine, "ALTER TABLE user ADD column 'wireless_device_ip' String DEFAULT ''")
+        except Exception as e:
+            db_hint = app_DB_path or str(engine.url)
+            log.error(
+                "Failed to add wireless_device_ip column to user table in app.db (%s). Error: %s",
+                db_hint,
+                e,
+            )
 
     # Migration to enable duplicates sidebar for existing admin users (one-time)
     try:
