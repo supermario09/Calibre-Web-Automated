@@ -1995,7 +1995,7 @@ def send_to_ereader(book_id, book_format, convert):
 @login_required_if_no_ano
 @download_required
 def send_wireless(book_id, book_format):
-    import requests as http_requests
+    import websocket
 
     device_ip = getattr(current_user, 'wireless_device_ip', '').strip()
     device_ip = device_ip.removeprefix('http://').removeprefix('https://').rstrip('/')
@@ -2019,19 +2019,35 @@ def send_wireless(book_id, book_format):
         return Response(json.dumps(response), mimetype='application/json')
 
     try:
-        upload_url = f"http://{device_ip}/upload?path=/"
         filename = book_data.name + "." + book_format.lower()
+        file_size = os.path.getsize(book_file_path)
+        chunk_size = 65536  # 64KB chunks
+
+        ws = websocket.WebSocket()
+        ws.connect(f"ws://{device_ip}:81/", timeout=10)
+
+        ws.send(f"START:{filename}:{file_size}:/")
+        reply = ws.recv()
+        if reply != "READY":
+            ws.close()
+            response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
+            return Response(json.dumps(response), mimetype='application/json')
+
         with open(book_file_path, 'rb') as f:
-            resp = http_requests.post(
-                upload_url,
-                files={'file': (filename, f, 'application/octet-stream')},
-                timeout=30
-            )
-        if resp.status_code in (200, 201):
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                ws.send_binary(chunk)
+
+        result = ws.recv()
+        ws.close()
+
+        if result == "DONE":
             ub.update_download(book_id, int(current_user.id))
             response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
         else:
-            response = [{'type': "danger", 'message': _("Device returned error: %(status)s", status=resp.status_code)}]
+            response = [{'type': "danger", 'message': _("Device error: %(result)s", result=result)}]
     except Exception as e:
         log.error("Failed to send book wirelessly: %s", e)
         response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
