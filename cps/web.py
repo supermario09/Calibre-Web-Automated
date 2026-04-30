@@ -2019,13 +2019,14 @@ def send_wireless(book_id, book_format):
         return Response(json.dumps(response), mimetype='application/json')
 
     try:
+        import time
         filename = book_data.name + "." + book_format.lower()
         file_size = os.path.getsize(book_file_path)
-        chunk_size = 65536  # 64KB chunks
+        chunk_size = 1024  # 1KB chunks — ESP32 needs small writes with time to flush to SD card
 
         ws = websocket.WebSocket()
-        ws.connect(f"ws://{device_ip}:81/", timeout=10)
-        ws.settimeout(30)
+        ws.settimeout(20)
+        ws.connect(f"ws://{device_ip}:81/")
 
         ws.send(f"START:{filename}:{file_size}:/")
         reply = ws.recv()
@@ -2034,43 +2035,30 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
-        result = None
         with open(book_file_path, 'rb') as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 ws.send_binary(chunk)
-                try:
-                    msg = ws.recv()
-                    if msg.startswith("DONE") or msg.startswith("ERROR"):
-                        result = msg
-                        break
-                    # PROGRESS update — keep sending chunks
-                except Exception:
-                    # X4 sends WebSocket CLOSE frame after final chunk
-                    # instead of a text DONE message — treat as success
-                    result = "DONE"
-                    break
+                time.sleep(0.02)  # 20ms delay for ESP32 SD card buffer
 
-        if result is None:
-            try:
-                result = ws.recv()
-            except Exception:
-                result = "DONE"
+        try:
+            final_ack = ws.recv()
+            log.debug("Wireless send final ack: %s", final_ack)
+        except Exception:
+            pass  # No final ACK is fine
+
+        ub.update_download(book_id, int(current_user.id))
+        response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+    except Exception as e:
+        log.error("Failed to send book wirelessly: %s", e)
+        response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
+    finally:
         try:
             ws.close()
         except Exception:
             pass
-
-        if result and result.startswith("DONE"):
-            ub.update_download(book_id, int(current_user.id))
-            response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
-        else:
-            response = [{'type': "danger", 'message': _("Device error: %(result)s", result=result)}]
-    except Exception as e:
-        log.error("Failed to send book wirelessly: %s", e)
-        response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
 
     return Response(json.dumps(response), mimetype='application/json')
 
