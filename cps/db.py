@@ -1121,11 +1121,9 @@ class CalibreDB:
                 if not auth:
                     continue
                 results = self.session.query(Authors).filter(Authors.sort == auth).all()
-                # ToDo: How to handle not found author name
                 if not len(results):
-                    log.error("Author '{}' not found to display name in right order".format(auth))
-                    # error = True
-                    break
+                    log.warning("Author sort '{}' not in Authors table; skipping sort for this entry".format(auth))
+                    continue
                 for r in results:
                     if r.id in ids:
                         authors_ordered.append(r)
