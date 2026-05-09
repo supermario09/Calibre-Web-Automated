@@ -35,6 +35,25 @@ class CWA_DB:
         self.set_default_settings()
         self.cwa_settings = self.get_cwa_settings()
 
+    def close(self):
+        """Explicitly close the SQLite connection to release the file descriptor."""
+        try:
+            if self.con:
+                self.con.close()
+        except Exception:
+            pass
+        self.con = None
+        self.cur = None
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def connect_to_db(self) -> tuple[sqlite3.Connection, sqlite3.Cursor] | None:
         """Establishes connection with the db or makes one if one doesn't already exist"""
