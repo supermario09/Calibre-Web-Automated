@@ -38,26 +38,29 @@ class TestBookItemClickHandler:
             "button stays disabled."
         )
 
-    def test_book_item_click_guards_against_double_fire(self):
-        """Click handler must bail out if the checkbox itself was clicked."""
+    def test_book_item_click_guards_against_links_and_buttons(self):
+        """Click handler must bail out if the click landed on a link, button, or checkbox."""
         src = _read_js()
-        # Find the book-item click handler block
         start = src.index("on('click', '.book-item'")
-        snippet = src[start:start + 300]
-        assert '.book-checkbox' in snippet, (
-            "book-item click handler must check if the checkbox was the direct target "
-            "to avoid double-toggling when the user clicks the checkbox directly."
+        end = src.index('\n    });', start) + 7
+        snippet = src[start:end]
+        assert "closest('a, button, .book-checkbox')" in snippet or \
+               "closest('a," in snippet, (
+            "book-item click handler must ignore clicks on <a>, <button>, and "
+            ".book-checkbox so Edit/Archive/Merge links still work."
         )
 
-    def test_card_click_triggers_checkbox_change(self):
-        """Handler must call .trigger('change') so updateSelectionCount fires."""
+    def test_card_click_directly_updates_selectedbooks(self):
+        """Handler must update selectedBooks directly, not rely on trigger('change')."""
         src = _read_js()
         start = src.index("on('click', '.book-item'")
-        snippet = src[start:start + 300]
-        assert "trigger('change')" in snippet, (
-            "book-item click handler must trigger 'change' on the checkbox so that "
-            "updateSelectionCount() runs and the batch delete button is enabled."
+        end = src.index('\n    });', start) + 7
+        snippet = src[start:end]
+        assert 'selectedBooks.push' in snippet, (
+            "book-item click handler must push to selectedBooks directly — "
+            "trigger('change') can silently fail in some browser/jQuery combinations."
         )
+        assert 'updateSelectionCount()' in snippet
 
 
 class TestSelectionCountEnablesButtons:

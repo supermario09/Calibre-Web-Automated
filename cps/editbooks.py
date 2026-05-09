@@ -1393,7 +1393,6 @@ def delete_book_from_table(book_id, book_format, json_response, location=""):
                     from cwa_db import CWA_DB
                     cwa_db = CWA_DB()
                     cwa_db.invalidate_duplicate_cache()
-                    cwa_db.close()
                 except Exception as e:
                     log.error("Failed to invalidate duplicate cache after deletion: %s", str(e))
                 

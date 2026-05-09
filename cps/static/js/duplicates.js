@@ -54,11 +54,25 @@ $(document).ready(function() {
         });
     }
     
-    // Clicking anywhere on a book card toggles its checkbox
+    // Clicking anywhere on a book card toggles its checkbox.
+    // Skip if the click landed on a link, button, or the checkbox itself
+    // so that Edit/Archive/Merge actions still work normally.
     $(document).on('click', '.book-item', function(event) {
-        if ($(event.target).is('.book-checkbox')) return; // checkbox click handled below
+        if ($(event.target).closest('a, button, .book-checkbox').length > 0) return;
         var checkbox = $(this).find('.book-checkbox');
-        checkbox.prop('checked', !checkbox.prop('checked')).trigger('change');
+        var bookId = checkbox.val();
+        if (!bookId) return;
+        var nowChecked = !checkbox.prop('checked');
+        checkbox.prop('checked', nowChecked);
+        // Update selectedBooks directly — more reliable than relying on trigger('change')
+        if (nowChecked) {
+            if (selectedBooks.indexOf(bookId) === -1) selectedBooks.push(bookId);
+        } else {
+            var idx = selectedBooks.indexOf(bookId);
+            if (idx > -1) selectedBooks.splice(idx, 1);
+        }
+        updateSelectionCount();
+        updateBookItemVisuals();
     });
 
     // Handle individual checkbox changes
