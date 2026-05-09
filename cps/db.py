@@ -813,6 +813,24 @@ class CalibreDB:
                     except Exception as e:
                         log.warning(f"Failed to set optimization pragmas on attached databases: {e}")
 
+                    # Ensure performance indexes exist on hot query columns.
+                    # CREATE INDEX IF NOT EXISTS is safe to run on every startup.
+                    try:
+                        connection.execute(text(
+                            "CREATE INDEX IF NOT EXISTS cwa_idx_authors_sort "
+                            "ON calibre.authors(sort)"
+                        ))
+                        connection.execute(text(
+                            "CREATE INDEX IF NOT EXISTS cwa_idx_data_book "
+                            "ON calibre.data(book)"
+                        ))
+                        connection.execute(text(
+                            "CREATE INDEX IF NOT EXISTS cwa_idx_books_author_sort "
+                            "ON calibre.books(author_sort)"
+                        ))
+                    except Exception as e:
+                        log.warning(f"Failed to create performance indexes: {e}")
+
                 conn = cls.engine.connect()
                 # conn.text_factory = lambda b: b.decode(errors = 'ignore') possible fix for #1302
             except Exception as ex:
@@ -1105,32 +1123,73 @@ class CalibreDB:
     # Orders all Authors in the list according to authors sort
     def order_authors(self, entries, list_return=False, combined=False):
         self.ensure_session()
+        if not entries:
+            return entries if list_return else []
+
+        # --- Phase 1: collect all sort values and IDs across every entry ---
+        all_sort_values = set()
+        all_ids = set()
         for entry in entries:
             if combined:
-                sort_authors = entry.Books.author_sort.split('&')
-                ids = [a.id for a in entry.Books.authors]
-
+                sort_str = entry.Books.author_sort or ''
+                entry_ids = [a.id for a in entry.Books.authors if a is not None]
             else:
-                sort_authors = entry.author_sort.split('&')
-                ids = [a.id for a in entry.authors]
-            authors_ordered = list()
-            # error = False
+                sort_str = entry.author_sort or ''
+                entry_ids = [a.id for a in entry.authors if a is not None]
+            for s in sort_str.split('&'):
+                s = strip_whitespaces(s)
+                if s:
+                    all_sort_values.add(s)
+            all_ids.update(entry_ids)
+
+        # --- Phase 2: two bulk queries instead of O(N×M) per-author queries ---
+        authors_by_sort = {}  # sort_str -> [Authors]
+        authors_by_id = {}    # id -> Authors
+
+        if all_sort_values:
+            for a in self.session.query(Authors).filter(
+                    Authors.sort.in_(list(all_sort_values))).all():
+                if a is None:
+                    continue
+                authors_by_id[a.id] = a
+                authors_by_sort.setdefault(a.sort, []).append(a)
+
+        missing_ids = all_ids - set(authors_by_id.keys())
+        if missing_ids:
+            for a in self.session.query(Authors).filter(
+                    Authors.id.in_(list(missing_ids))).all():
+                if a is not None:
+                    authors_by_id[a.id] = a
+
+        # --- Phase 3: in-memory ordering per entry — zero additional DB queries ---
+        for entry in entries:
+            if combined:
+                sort_authors = (entry.Books.author_sort or '').split('&')
+                ids = [a.id for a in entry.Books.authors if a is not None]
+            else:
+                sort_authors = (entry.author_sort or '').split('&')
+                ids = [a.id for a in entry.authors if a is not None]
+
+            ids = list(ids)
+            authors_ordered = []
+
             for auth in sort_authors:
                 auth = strip_whitespaces(auth)
-                # Skip empty author strings to prevent spurious errors
                 if not auth:
                     continue
-                results = self.session.query(Authors).filter(Authors.sort == auth).all()
-                if not len(results):
+                sort_matches = authors_by_sort.get(auth, [])
+                if not sort_matches:
                     log.debug("Author sort '{}' not in Authors table; skipping sort for this entry".format(auth))
                     continue
-                for r in results:
+                for r in sort_matches:
                     if r.id in ids:
                         authors_ordered.append(r)
                         ids.remove(r.id)
+
             for author_id in ids:
-                result = self.session.query(Authors).filter(Authors.id == author_id).first()
-                authors_ordered.append(result)
+                result = authors_by_id.get(author_id)
+                if result is not None:
+                    authors_ordered.append(result)
 
             if list_return:
                 if combined:

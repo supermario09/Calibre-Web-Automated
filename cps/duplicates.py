@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request, abort
 from flask_babel import gettext as _
 from sqlalchemy import func, and_, case
 from sqlalchemy.sql.expression import true, false
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, timezone
 from functools import wraps
 import hashlib
@@ -800,10 +800,18 @@ def find_duplicate_books_python(use_title, use_author, use_language, use_series,
     """
     print("[cwa-duplicates] Using Python-based duplicate detection", flush=True)
     
-    # Get all books with proper user filtering - this is much simpler and more reliable
-    # than trying to do complex joins for duplicate detection
+    # Eagerly load all relationships accessed in the grouping loop so we don't
+    # fire a lazy-load query per book (would be O(N) queries on 20k books).
+    # selectinload uses SELECT … WHERE id IN (…) — safe for multiple collections.
     books_query = (calibre_db.session.query(db.Books)
-                   .filter(get_common_filters(user_id=user_id))  # Respect user permissions and library filtering
+                   .options(
+                       selectinload(db.Books.authors),
+                       selectinload(db.Books.languages),
+                       selectinload(db.Books.series),
+                       selectinload(db.Books.publishers),
+                       selectinload(db.Books.data),
+                   )
+                   .filter(get_common_filters(user_id=user_id))
                    .order_by(db.Books.title, db.Books.timestamp.desc()))
 
     if candidate_ids is not None:
@@ -829,11 +837,12 @@ def find_duplicate_books_python(use_title, use_author, use_language, use_series,
 
         primary_author = None
         if use_author:
-            # Ensure authors are loaded and not empty
-            if book.authors and len(book.authors) > 0:
-                # Get primary author (use Calibre-Web's standard approach)
-                book.ordered_authors = calibre_db.order_authors([book])
-                primary_author = book.ordered_authors[0].name if book.ordered_authors and len(book.ordered_authors) > 0 else "unknown"
+            # authors already loaded via selectinload — use author_sort for a
+            # consistent primary-author key without any extra DB queries.
+            if book.author_sort:
+                primary_author = book.author_sort.split('&')[0].strip() or "unknown"
+            elif book.authors:
+                primary_author = book.authors[0].name if book.authors[0] else "unknown"
             else:
                 primary_author = "unknown"
         
@@ -894,15 +903,16 @@ def find_duplicate_books_python(use_title, use_author, use_language, use_series,
             # Sort books by timestamp (newest first)
             books.sort(key=lambda x: _timestamp_or_default(x.timestamp, _AWARE_MIN), reverse=True)
             
+            # Order authors for the whole group in one bulk call (order_authors
+            # now does two queries total regardless of how many books/authors).
+            calibre_db.order_authors(books, list_return=True)
+
             # Add additional information for display
             for book in books:
-                # Ensure we have ordered authors
-                if not hasattr(book, 'ordered_authors') or not book.ordered_authors:
-                    book.ordered_authors = calibre_db.order_authors([book])
-                
-                # Handle potential missing authors
-                if book.ordered_authors and len(book.ordered_authors) > 0:
-                    book.author_names = ', '.join([author.name.replace('|', ',') for author in book.ordered_authors if author.name])
+                if book.ordered_authors:
+                    book.author_names = ', '.join(
+                        a.name.replace('|', ',') for a in book.ordered_authors if a and a.name
+                    )
                 else:
                     book.author_names = 'Unknown'
                 

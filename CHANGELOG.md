@@ -10,9 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Performance indexes on Calibre DB hot columns**: `CREATE INDEX IF NOT EXISTS` applied on startup for `calibre.authors(sort)`, `calibre.data(book)`, and `calibre.books(author_sort)`. Eliminates full-table scans on queries that run on every page render and every duplicate scan.
+
 - **Duplicate groups pagination**: The `/duplicates` page now loads groups in pages of 25 (configurable: 10 / 25 / 50 / 100 via a per-page selector). Previously all groups were rendered at once, causing slow JS and a "Select All" that would select every book in the entire library. Now "Select Duplicates (this page)" is scoped to the current page only, keeping DOM size and selection state manageable. Pagination controls (prev / next / first / last / per-page selector) are shown when there is more than one page. The route accepts `?page=N&per_page=N` query params.
 
 ### Fixed
+
+- **`cps/db.py` — `order_authors()` crash + N+1 rewrite**: Fixed `AttributeError: 'NoneType' object has no attribute 'id'` crash on the homepage/book list when the Calibre DB has orphaned author sort values. Simultaneously rewrote the function to use two bulk `.in_()` queries (one for all sort values, one fallback for any unmatched IDs) instead of one query per author per book. On a 20k book library this reduces author queries from O(N×M) to O(1). All `None` results from the DB are now guarded.
+
+- **`cps/duplicates.py` — eager loading + remove N+1 in grouping loop**: Added `selectinload` for `authors`, `languages`, `series`, `publishers`, and `data` on the books query in `find_duplicate_books_python()`. Previously each of these relationships triggered a lazy-load query per book (up to 100k extra queries on a 20k library). The per-book `calibre_db.order_authors([book])` call in the grouping loop is replaced with direct `book.author_sort` access (already in memory); `order_authors` is now called once per duplicate group for display ordering.
 
 - **`cps/static/js/duplicates.js`**: Batch delete (and Delete Selected) button remained disabled even after selecting books, because clicking a book card did not register a selection — only clicking the tiny checkbox directly worked. Added a `.book-item` click handler that toggles the checkbox and fires its `change` event, so clicking anywhere on a book card now selects it and enables the action buttons.
 
