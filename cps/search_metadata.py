@@ -153,29 +153,32 @@ def metadata_change_active_provider(prov_name):
 @meta.route("/metadata/search", methods=["POST"])
 @user_login_required
 def metadata_search():
-    query = request.form.to_dict().get("query")
-    data = list()
-    active = current_user.view_settings.get("metadata", {})
-    locale = get_locale()
-    global_enabled = _get_global_provider_enabled_map()
-    if query:
-        static_cover = url_for("static", filename="generic_cover.svg")
-        # ret = cl[0].search(query, static_cover, locale)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            meta = {
-                executor.submit(copy_current_request_context(c.search), query, static_cover, locale): c
-                for c in cl
-                if active.get(c.__id__, True) and bool(global_enabled.get(c.__id__, True))
-            }
-            for future in concurrent.futures.as_completed(meta):
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    provider = meta.get(future)
-                    provider_name = provider.__class__.__name__ if provider else "Unknown"
-                    log.warning("Metadata provider %s failed: %s", provider_name, exc)
-                    continue
-                if not result:
-                    continue
-                data.extend([asdict(x) for x in result if x])
-    return  make_response(jsonify(data))
+    try:
+        query = request.form.to_dict().get("query")
+        data = list()
+        active = (current_user.view_settings or {}).get("metadata", {})
+        locale = get_locale()
+        global_enabled = _get_global_provider_enabled_map()
+        if query:
+            static_cover = url_for("static", filename="generic_cover.svg")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {
+                    executor.submit(copy_current_request_context(c.search), query, static_cover, locale): c
+                    for c in cl
+                    if active.get(c.__id__, True) and bool(global_enabled.get(c.__id__, True))
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        provider = futures.get(future)
+                        provider_name = provider.__class__.__name__ if provider else "Unknown"
+                        log.warning("Metadata provider %s failed: %s", provider_name, exc)
+                        continue
+                    if not result:
+                        continue
+                    data.extend([asdict(x) for x in result if x])
+        return make_response(jsonify(data))
+    except Exception as e:
+        log.error("metadata_search endpoint failed: %s", e, exc_info=True)
+        return make_response(jsonify({"error": str(e)}), 500)

@@ -260,12 +260,16 @@ $(function () {
             );
           }
         },
-        error: function error() {
+        error: function error(xhr) {
+          var detail = "";
+          try {
+            var resp = JSON.parse(xhr.responseText);
+            if (resp && resp.error) detail = ": " + resp.error;
+          } catch(e) {}
           $("#meta-info").html(
             '<p class="text-danger">' +
-              msg.search_error +
-              "!</p>" +
-              $("#meta-info")[0].innerHTML
+              msg.search_error + detail +
+              "!</p>"
           );
         },
       });
