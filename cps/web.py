@@ -2019,10 +2019,8 @@ def send_wireless(book_id, book_format):
         return Response(json.dumps(response), mimetype='application/json')
 
     try:
-        import time
         filename = book_data.name + "." + book_format.lower()
         file_size = os.path.getsize(book_file_path)
-        import select
         chunk_size = 1024  # 1KB chunks — ESP32 needs small writes with time to flush to SD card
 
         ws = websocket.WebSocket()
@@ -2036,46 +2034,47 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
-        def drain_incoming(ws_conn, timeout=0.05):
-            """Drain any PROGRESS/status messages mid-transfer.
-            Uses a short per-call timeout so it never blocks the send loop."""
-            try:
-                ws_conn.settimeout(timeout)
-                while True:
-                    msg = ws_conn.recv()
-                    if msg:
-                        log.debug("Wireless device: %s", msg)
-            except Exception:
-                pass
-            finally:
-                ws_conn.settimeout(20)  # restore send timeout
-
+        # Stop-and-wait protocol: read the device's response after every chunk.
+        # The X4/ESP32 sends PROGRESS:n after writing each chunk to SD card.
+        # Reading it after each send provides natural flow control — we never
+        # outrun the device's SD write speed, and the socket buffer stays empty.
+        result = None
         with open(book_file_path, 'rb') as f:
-            bytes_sent = 0
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 ws.send_binary(chunk)
-                bytes_sent += len(chunk)
-                time.sleep(0.02)  # 20ms delay for ESP32 SD card buffer
-                # Drain PROGRESS messages every 32KB to prevent buffer overflow
-                if bytes_sent % (32 * 1024) < chunk_size:
-                    drain_incoming(ws)
+                try:
+                    msg = ws.recv()
+                    if msg.startswith("DONE") or msg.startswith("ERROR") or msg.startswith("COMPLETE"):
+                        result = msg
+                        break
+                    # PROGRESS update — keep sending
+                    log.debug("Wireless device: %s", msg)
+                except websocket.WebSocketConnectionClosedException:
+                    # X4 sends WebSocket CLOSE frame on completion instead of DONE
+                    result = "DONE"
+                    break
+                except Exception:
+                    pass  # other transient errors — keep sending
 
-        drain_incoming(ws)  # final drain before waiting for completion ACK
+        if result is None:
+            try:
+                ws.settimeout(120)  # SD card flush can take time after last chunk
+                result = ws.recv()
+                log.debug("Wireless send final ack: %s", result)
+            except websocket.WebSocketConnectionClosedException:
+                result = "DONE"  # CLOSE frame = success
+            except Exception:
+                result = "DONE"  # no ACK still means transfer completed
 
-        try:
-            # Give the device time to finish flushing to SD card — this can
-            # take much longer than the per-send timeout for large files.
-            ws.settimeout(120)
-            final_ack = ws.recv()
-            log.debug("Wireless send final ack: %s", final_ack)
-        except Exception:
-            pass  # No final ACK is fine
-
-        ub.update_download(book_id, int(current_user.id))
-        response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+        completed = result and (result.startswith("DONE") or result.startswith("COMPLETE") or result == "DONE")
+        if completed:
+            ub.update_download(book_id, int(current_user.id))
+            response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+        else:
+            response = [{'type': "danger", 'message': _("Device reported an error: %(msg)s", msg=result or "unknown")}]
     except Exception as e:
         log.error("Failed to send book wirelessly: %s", e)
         response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
