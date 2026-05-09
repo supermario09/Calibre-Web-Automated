@@ -2036,16 +2036,19 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
-        def drain_incoming(ws_conn):
-            """Drain any PROGRESS/status messages the device sends mid-transfer.
-            Prevents the socket receive buffer from filling up and stalling the send loop."""
+        def drain_incoming(ws_conn, timeout=0.05):
+            """Drain any PROGRESS/status messages mid-transfer.
+            Uses a short per-call timeout so it never blocks the send loop."""
             try:
-                raw_sock = ws_conn.sock.sock if hasattr(ws_conn.sock, 'sock') else ws_conn.sock
-                while select.select([raw_sock], [], [], 0)[0]:
+                ws_conn.settimeout(timeout)
+                while True:
                     msg = ws_conn.recv()
-                    log.debug("Wireless device: %s", msg)
+                    if msg:
+                        log.debug("Wireless device: %s", msg)
             except Exception:
                 pass
+            finally:
+                ws_conn.settimeout(20)  # restore send timeout
 
         with open(book_file_path, 'rb') as f:
             bytes_sent = 0
@@ -2056,13 +2059,16 @@ def send_wireless(book_id, book_format):
                 ws.send_binary(chunk)
                 bytes_sent += len(chunk)
                 time.sleep(0.02)  # 20ms delay for ESP32 SD card buffer
-                # Drain PROGRESS messages every 50KB to prevent buffer overflow
-                if bytes_sent % (50 * 1024) < chunk_size:
+                # Drain PROGRESS messages every 32KB to prevent buffer overflow
+                if bytes_sent % (32 * 1024) < chunk_size:
                     drain_incoming(ws)
 
         drain_incoming(ws)  # final drain before waiting for completion ACK
 
         try:
+            # Give the device time to finish flushing to SD card — this can
+            # take much longer than the per-send timeout for large files.
+            ws.settimeout(120)
             final_ack = ws.recv()
             log.debug("Wireless send final ack: %s", final_ack)
         except Exception:
