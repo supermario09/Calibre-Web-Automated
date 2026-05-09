@@ -2034,47 +2034,34 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
-        # Stop-and-wait protocol: read the device's response after every chunk.
-        # The X4/ESP32 sends PROGRESS:n after writing each chunk to SD card.
-        # Reading it after each send provides natural flow control — we never
-        # outrun the device's SD write speed, and the socket buffer stays empty.
-        result = None
+        import time
+        # Send all chunks with a small delay — the X4 does not ack every chunk.
+        # After all data is sent, wait for the device's final DONE/CLOSE signal.
         with open(book_file_path, 'rb') as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 ws.send_binary(chunk)
-                try:
-                    msg = ws.recv()
-                    if msg.startswith("DONE") or msg.startswith("ERROR") or msg.startswith("COMPLETE"):
-                        result = msg
-                        break
-                    # PROGRESS update — keep sending
-                    log.debug("Wireless device: %s", msg)
-                except websocket.WebSocketConnectionClosedException:
-                    # X4 sends WebSocket CLOSE frame on completion instead of DONE
-                    result = "DONE"
-                    break
-                except Exception:
-                    pass  # other transient errors — keep sending
+                time.sleep(0.02)  # 20ms — gives ESP32 time to flush each KB to SD
 
-        if result is None:
-            try:
-                ws.settimeout(120)  # SD card flush can take time after last chunk
-                result = ws.recv()
-                log.debug("Wireless send final ack: %s", result)
-            except websocket.WebSocketConnectionClosedException:
-                result = "DONE"  # CLOSE frame = success
-            except Exception:
-                result = "DONE"  # no ACK still means transfer completed
-
-        completed = result and (result.startswith("DONE") or result.startswith("COMPLETE") or result == "DONE")
-        if completed:
+        try:
+            ws.settimeout(120)  # SD card flush after final chunk can take time
+            result = ws.recv()
+            log.debug("Wireless send final ack: %s", result)
+            if result.startswith("DONE") or result.startswith("COMPLETE"):
+                ub.update_download(book_id, int(current_user.id))
+                response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+            else:
+                response = [{'type': "danger", 'message': _("Device error: %(msg)s", msg=result)}]
+        except websocket.WebSocketConnectionClosedException:
+            # X4 sends WebSocket CLOSE frame instead of DONE text — treat as success
             ub.update_download(book_id, int(current_user.id))
             response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
-        else:
-            response = [{'type': "danger", 'message': _("Device reported an error: %(msg)s", msg=result or "unknown")}]
+        except Exception:
+            # No final ACK received but transfer completed — assume success
+            ub.update_download(book_id, int(current_user.id))
+            response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
     except Exception as e:
         log.error("Failed to send book wirelessly: %s", e)
         response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
