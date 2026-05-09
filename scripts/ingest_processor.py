@@ -1159,23 +1159,31 @@ class NewBookProcessor:
         This solves the issue where external calibredb adds aren't immediately visible
         in Calibre-Web until container restart.
         """
-        # Route DB reconnect via the long-lived web process to avoid cross-process config/session issues
-        try:
-            url = get_internal_api_url("/cwa-internal/reconnect-db")
-            print("[ingest-processor] Refreshing Calibre-Web database session...", flush=True)
-            resp = requests.post(
-                url,
-                headers=get_internal_api_headers(),
-                timeout=5,
-                verify=False,
-            )
-            if resp.status_code == 200:
-                print("[ingest-processor] Database session refresh enqueued", flush=True)
-            else:
+        url = get_internal_api_url("/cwa-internal/reconnect-db")
+        # Flask can be momentarily saturated during heavy ingest — retry with backoff
+        # before giving up. The endpoint itself returns in <100ms once Flask is free.
+        delays = [2, 5, 10]
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                print(f"[ingest-processor] Refreshing Calibre-Web database session (attempt {attempt})...", flush=True)
+                resp = requests.post(
+                    url,
+                    headers=get_internal_api_headers(),
+                    timeout=30,
+                    verify=False,
+                )
+                if resp.status_code == 200:
+                    print("[ingest-processor] Database session refresh enqueued", flush=True)
+                    return
                 print(f"[ingest-processor] WARN: DB refresh endpoint returned {resp.status_code}", flush=True)
-        except Exception as e:
-            print(f"[ingest-processor] WARN: Failed to call DB refresh endpoint: {e}", flush=True)
-            print("[ingest-processor] Continuing despite session refresh failure - books may require manual refresh", flush=True)
+                return
+            except Exception as e:
+                if attempt < len(delays):
+                    print(f"[ingest-processor] WARN: DB refresh attempt {attempt} failed ({e}), retrying in {delay}s...", flush=True)
+                    time.sleep(delay)
+                else:
+                    print(f"[ingest-processor] WARN: Failed to call DB refresh endpoint after {len(delays)} attempts: {e}", flush=True)
+                    print("[ingest-processor] Continuing despite session refresh failure - books may require manual refresh", flush=True)
 
 
     def invalidate_duplicate_cache(self) -> None:
@@ -1189,7 +1197,7 @@ class NewBookProcessor:
             resp = requests.post(
                 url,
                 headers=get_internal_api_headers(),
-                timeout=5,
+                timeout=30,
                 verify=False,
             )
             if resp.status_code == 200:
@@ -1224,7 +1232,7 @@ class NewBookProcessor:
                     url,
                     json=payload,
                     headers=get_internal_api_headers(),
-                    timeout=5,
+                    timeout=30,
                     verify=False,
                 )
                 if resp.status_code == 200:
