@@ -1371,12 +1371,14 @@
         });
     });
 
-    // Convert to EPUB (on-the-fly, single book)
+    // Convert to EPUB (on-the-fly, single book) with task polling + auto-reload
     $("#convertToEpubBtn").on("click", function () {
         var btn = $(this);
         var bookId = btn.data("book-id");
         var bookFormat = btn.data("book-format");
-        btn.prop("disabled", true);
+        btn.prop("disabled", true)
+           .html('<span class="glyphicon glyphicon-refresh glyphicon-spin"></span>');
+
         $.ajax({
             method: "POST",
             url: "{{ url_for('edit-book.ajax_convert_to_epub', book_id=0) }}".replace("/0", "/" + bookId),
@@ -1385,17 +1387,60 @@
                 csrf_token: $("input[name='csrf_token']").val()
             },
             success: function (data) {
+                if (!data.success) {
+                    showActionToast(data.message, btn[0]);
+                    btn.html('<span class="glyphicon glyphicon-refresh"></span>').prop("disabled", false);
+                    return;
+                }
                 showActionToast(data.message, btn[0]);
-                btn.prop("disabled", false);
+                if (data.task_id) {
+                    pollConversionTask(data.task_id, btn);
+                } else {
+                    btn.html('<span class="glyphicon glyphicon-refresh"></span>').prop("disabled", false);
+                }
             },
             error: function (xhr) {
                 var msg = "{{ _('Conversion failed') }}";
                 try { msg = JSON.parse(xhr.responseText).message || msg; } catch(e) {}
                 showActionToast(msg, btn[0]);
-                btn.prop("disabled", false);
+                btn.html('<span class="glyphicon glyphicon-refresh"></span>').prop("disabled", false);
             }
         });
     });
+
+    function pollConversionTask(taskId, btn) {
+        var STAT_FINISH_SUCCESS = 3, STAT_FAIL = 1, STAT_CANCELLED = 5;
+        var maxAttempts = 180; // 15 min at 5s intervals
+        var attempts = 0;
+        var poller = setInterval(function () {
+            attempts++;
+            if (attempts > maxAttempts) {
+                clearInterval(poller);
+                showActionToast("{{ _('Conversion timed out — check the Tasks panel') }}", btn[0]);
+                btn.html('<span class="glyphicon glyphicon-refresh"></span>').prop("disabled", false);
+                return;
+            }
+            $.getJSON("{{ url_for('tasks.get_email_status_json') }}", function (tasks) {
+                for (var i = 0; i < tasks.length; i++) {
+                    if (String(tasks[i].task_id) === String(taskId)) {
+                        var stat = tasks[i].stat;
+                        if (stat === STAT_FINISH_SUCCESS) {
+                            clearInterval(poller);
+                            showActionToast("{{ _('Conversion complete — reloading…') }}", btn[0]);
+                            setTimeout(function () { location.reload(); }, 1500);
+                        } else if (stat === STAT_FAIL || stat === STAT_CANCELLED) {
+                            clearInterval(poller);
+                            var errMsg = tasks[i].error || "{{ _('Conversion failed') }}";
+                            showActionToast(errMsg, btn[0]);
+                            btn.html('<span class="glyphicon glyphicon-refresh"></span>').prop("disabled", false);
+                        }
+                        return;
+                    }
+                }
+                // Task not found — may have been cleaned up after success
+            });
+        }, 5000);
+    }
 
     // Send to Device (WiFi)
     $("#sendWirelessBtn").on("click", function () {

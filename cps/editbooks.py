@@ -216,8 +216,10 @@ def convert_bookformat(book_id):
 @login_required_if_no_ano
 @edit_required
 def ajax_convert_to_epub(book_id):
-    """Queue an on-the-fly conversion to EPUB for a single book. Returns JSON."""
+    """Queue an on-the-fly conversion to EPUB for a single book. Returns JSON with task_id."""
     from flask import jsonify
+    from .tasks.convert import TaskConvert
+
     book_format_from = request.form.get('book_format_from', '').upper()
     if not book_format_from:
         return jsonify({"success": False, "message": _("Source format missing")}), 400
@@ -225,17 +227,33 @@ def ajax_convert_to_epub(book_id):
     if not config.config_converterpath:
         return jsonify({"success": False, "message": _("Calibre converter not configured")}), 400
 
-    err = helper.convert_book_format(
-        book_id, config.get_book_path(),
-        book_format_from, 'EPUB',
-        current_user.name
-    )
-    if err:
-        return jsonify({"success": False, "message": str(err)}), 500
+    book = calibre_db.get_book(book_id)
+    if not book:
+        return jsonify({"success": False, "message": _("Book not found")}), 404
+
+    data = calibre_db.get_book_format(book_id, book_format_from)
+    if not data:
+        return jsonify({"success": False,
+                        "message": _("%(format)s format not found for book id: %(book)d",
+                                     format=book_format_from, book=book_id)}), 400
+
+    file_path = os.path.join(config.get_book_path(), book.path, data.name)
+    if not os.path.exists(file_path + "." + book_format_from.lower()):
+        return jsonify({"success": False,
+                        "message": _("%(format)s not found: %(fn)s",
+                                     format=book_format_from,
+                                     fn=data.name + "." + book_format_from.lower())}), 400
+
+    settings = {'old_book_format': book_format_from, 'new_book_format': 'EPUB'}
+    task = TaskConvert(file_path, book.id,
+                       "{} → EPUB: {}".format(book_format_from, book.title),
+                       settings, None, current_user.name)
+    WorkerThread.add(current_user.name, task)
+
     return jsonify({
         "success": True,
-        "message": _("Queued conversion from %(fmt)s to EPUB — check the Tasks panel for progress",
-                     fmt=book_format_from)
+        "task_id": str(task.id),
+        "message": _("Converting %(fmt)s to EPUB…", fmt=book_format_from)
     })
 
 
