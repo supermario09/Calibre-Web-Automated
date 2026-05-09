@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Duplicate groups pagination**: The `/duplicates` page now loads groups in pages of 25 (configurable: 10 / 25 / 50 / 100 via a per-page selector). Previously all groups were rendered at once, causing slow JS and a "Select All" that would select every book in the entire library. Now "Select Duplicates (this page)" is scoped to the current page only, keeping DOM size and selection state manageable. Pagination controls (prev / next / first / last / per-page selector) are shown when there is more than one page. The route accepts `?page=N&per_page=N` query params.
+
 ### Fixed
 
 - **`cps/static/js/duplicates.js`**: Batch delete (and Delete Selected) button remained disabled even after selecting books, because clicking a book card did not register a selection — only clicking the tiny checkbox directly worked. Added a `.book-item` click handler that toggles the checkbox and fires its `change` event, so clicking anywhere on a book card now selects it and enables the action buttons.

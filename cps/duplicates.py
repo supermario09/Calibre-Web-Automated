@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # See CONTRIBUTORS for full list of authors.
 
+import math
 from flask import Blueprint, jsonify, request, abort
 from flask_babel import gettext as _
 from sqlalchemy import func, and_, case
@@ -273,16 +274,24 @@ def filter_dismissed_groups(duplicate_groups, user_id=None):
         return duplicate_groups
 
 
+_DUPLICATES_PER_PAGE_DEFAULT = 25
+_DUPLICATES_PER_PAGE_MIN = 5
+_DUPLICATES_PER_PAGE_MAX = 100
+
+
 @duplicates.route("/duplicates")
 @login_required_if_no_ano
 @admin_or_edit_required
 def show_duplicates():
-    """Display books with duplicate titles and authors"""
+    """Display books with duplicate titles and authors, paginated by group."""
+    page_num = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', _DUPLICATES_PER_PAGE_DEFAULT, type=int)
+    per_page = max(_DUPLICATES_PER_PAGE_MIN, min(_DUPLICATES_PER_PAGE_MAX, per_page))
+
     print("[cwa-duplicates] Loading duplicates page...", flush=True)
     log.info("[cwa-duplicates] Loading duplicates page for user: %s", current_user.name)
-    
+
     try:
-        # Use SQL/Python detection to find all duplicates once, then filter for current user
         all_groups = find_duplicate_books(include_dismissed=True)
         duplicate_groups = filter_dismissed_groups(all_groups, current_user.id if current_user else None)
 
@@ -294,34 +303,45 @@ def show_duplicates():
                 max_book_id = max_id_result if max_id_result is not None else 0
             except Exception as max_ex:
                 log.warning("[cwa-duplicates] Could not get max book ID for cache update: %s", str(max_ex))
-
             cwa_db_cache = CWA_DB()
             cwa_db_cache.update_duplicate_cache(all_groups, len(all_groups), max_book_id)
             log.debug("[cwa-duplicates] Cache updated from /duplicates page load")
         except Exception as cache_ex:
             log.warning("[cwa-duplicates] Failed to update cache from /duplicates page: %s", str(cache_ex))
 
-        # Compute next scheduled scan run
         cwa_db = CWA_DB()
         next_scan_run = get_next_duplicate_scan_run(cwa_db.cwa_settings)
-        
-        print(f"[cwa-duplicates] Found {len(duplicate_groups)} duplicate groups total", flush=True)
-        log.info("[cwa-duplicates] Found %s duplicate groups total", len(duplicate_groups))
-        
-        return render_title_template('duplicates.html', 
-                                     duplicate_groups=duplicate_groups,
+
+        total_groups = len(duplicate_groups)
+        total_pages = max(1, math.ceil(total_groups / per_page))
+        page_num = max(1, min(page_num, total_pages))
+        offset = (page_num - 1) * per_page
+        page_groups = duplicate_groups[offset:offset + per_page]
+
+        print(f"[cwa-duplicates] {total_groups} groups total, showing page {page_num}/{total_pages}", flush=True)
+        log.info("[cwa-duplicates] %s groups total, page %s/%s", total_groups, page_num, total_pages)
+
+        return render_title_template('duplicates.html',
+                                     duplicate_groups=page_groups,
+                                     total_groups=total_groups,
+                                     page_num=page_num,
+                                     total_pages=total_pages,
+                                     per_page=per_page,
                                      next_scan_run=next_scan_run,
-                                     title=_("Duplicate Books"), 
+                                     title=_("Duplicate Books"),
                                      page="duplicates")
-                                     
+
     except Exception as e:
         print(f"[cwa-duplicates] Critical error loading duplicates page: {str(e)}", flush=True)
         log.error("[cwa-duplicates] Critical error loading duplicates page: %s", str(e))
-        # Return empty page on error
-        return render_title_template('duplicates.html', 
+        return render_title_template('duplicates.html',
                                      duplicate_groups=[],
+                                     total_groups=0,
+                                     page_num=1,
+                                     total_pages=1,
+                                     per_page=_DUPLICATES_PER_PAGE_DEFAULT,
                                      next_scan_run=None,
-                                     title=_("Duplicate Books"), 
+                                     title=_("Duplicate Books"),
                                      page="duplicates")
 
 

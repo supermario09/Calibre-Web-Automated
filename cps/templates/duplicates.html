@@ -375,14 +375,17 @@
           <button type="button" class="btn btn-sm btn-danger" id="cancel_scan" style="display: none;">
             <span class="glyphicon glyphicon-ban-circle"></span> {{_('Cancel Scan')}}
           </button>
-          {% if duplicate_groups %}
-            <button type="button" class="btn btn-sm btn-default" id="select_all">{{_('Select Duplicates')}}</button>
+          {% if total_groups %}
+            <button type="button" class="btn btn-sm btn-default" id="select_all">{{_('Select Duplicates (this page)')}}</button>
             <button type="button" class="btn btn-sm btn-default" id="select_none">{{_('Select None')}}</button>
             <button type="button" class="btn btn-sm btn-danger disabled" id="delete_selected" aria-disabled="true">{{_('Delete Selected')}}</button>
             <button type="button" class="btn btn-sm btn-warning disabled" id="batch_delete_selected" aria-disabled="true" title="{{_('Delete selected books in batches (recommended for large selections)')}}">
               <span class="glyphicon glyphicon-th"></span> {{_('Batch Delete')}}
             </button>
             <span id="selection_count" class="selection-info"></span>
+            <span class="selection-info" style="margin-left:10px; color:#aaa;">
+              {{_('%(count)s duplicate groups total', count=total_groups)}}
+            </span>
           {% endif %}
         </div>
 
@@ -514,6 +517,51 @@
           </div>
           {% endfor %}
         </div>
+
+        {% if total_pages > 1 %}
+        <div style="margin-top: 30px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;">
+          {% if page_num > 1 %}
+            <a href="{{ url_for('duplicates.show_duplicates', page=1, per_page=per_page) }}"
+               class="btn btn-sm btn-default" title="{{_('First page')}}">
+              <span class="glyphicon glyphicon-step-backward"></span>
+            </a>
+            <a href="{{ url_for('duplicates.show_duplicates', page=page_num-1, per_page=per_page) }}"
+               class="btn btn-sm btn-default">
+              <span class="glyphicon glyphicon-chevron-left"></span> {{_('Previous')}}
+            </a>
+          {% endif %}
+
+          <span style="color: #ddd; font-size: 14px; padding: 0 8px;">
+            {{_('Page %(current)s of %(total)s', current=page_num, total=total_pages)}}
+            &nbsp;·&nbsp;
+            {{_('%(count)s groups', count=total_groups)}}
+          </span>
+
+          {% if page_num < total_pages %}
+            <a href="{{ url_for('duplicates.show_duplicates', page=page_num+1, per_page=per_page) }}"
+               class="btn btn-sm btn-default">
+              {{_('Next')}} <span class="glyphicon glyphicon-chevron-right"></span>
+            </a>
+            <a href="{{ url_for('duplicates.show_duplicates', page=total_pages, per_page=per_page) }}"
+               class="btn btn-sm btn-default" title="{{_('Last page')}}">
+              <span class="glyphicon glyphicon-step-forward"></span>
+            </a>
+          {% endif %}
+
+          <form method="get" action="{{ url_for('duplicates.show_duplicates') }}" style="display:inline-flex; align-items:center; gap:6px; margin:0;">
+            <label for="per_page_select" style="color:#aaa; margin:0; font-size:13px;">{{_('Per page:')}}</label>
+            <select id="per_page_select" name="per_page" class="form-control input-sm"
+                    style="background:#1c2832; color:white; border:1px solid #444; width:70px;"
+                    onchange="this.form.submit()">
+              {% for n in [10, 25, 50, 100] %}
+                <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+              {% endfor %}
+            </select>
+            <input type="hidden" name="page" value="1">
+          </form>
+        </div>
+        {% endif %}
+
       {% else %}
         <div class="no-duplicates">
           <h3>{{_('No Duplicate Books Found')}}</h3>
