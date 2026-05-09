@@ -5,18 +5,42 @@
 # See CONTRIBUTORS for full list of authors.
 
 import argparse
+import gc
 import json
 import logging
 import os
 import re
 import sys
 import shutil
+import threading
 from pathlib import Path
 import subprocess
 import tempfile
 import atexit
 from datetime import datetime
 import sqlite3
+
+# Per-book conversion timeout. Configurable via env var (default 10 min).
+_CONVERSION_TIMEOUT = int(os.environ.get('CWA_CONVERSION_TIMEOUT', '600'))
+# Memory cap per ebook-convert child process (default 1500 MB).
+_CONVERSION_MEMORY_BYTES = int(os.environ.get('CWA_CONVERSION_MEMORY_MB', '1500')) * 1024 * 1024
+
+
+def _set_conversion_limits():
+    """Preexec hook applied in the child process on Linux to cap virtual memory."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (_CONVERSION_MEMORY_BYTES, _CONVERSION_MEMORY_BYTES))
+    except Exception:
+        pass
+
+
+def _kill_after(process, timeout):
+    """Return a started Timer that kills *process* after *timeout* seconds."""
+    t = threading.Timer(timeout, lambda: (process.poll() is None) and process.kill())
+    t.daemon = True
+    t.start()
+    return t
 
 import pwd
 import grp
@@ -396,13 +420,18 @@ class LibraryConverter:
                         stderr=subprocess.STDOUT,
                         env=self.calibre_env,
                         text=True,
-                        encoding='utf-8'
+                        encoding='utf-8',
+                        preexec_fn=_set_conversion_limits if os.name != 'nt' else None
                     ) as process:
-                        for line in process.stdout: # Read from the combined stdout (which includes stderr)
-                            if self.verbose:
-                                print_and_log(line)
-                            else:
-                                print(line)
+                        watchdog = _kill_after(process, _CONVERSION_TIMEOUT)
+                        try:
+                            for line in process.stdout: # Read from the combined stdout (which includes stderr)
+                                if self.verbose:
+                                    print_and_log(line)
+                                else:
+                                    print(line)
+                        finally:
+                            watchdog.cancel()
 
                     if self.cwa_settings['auto_backup_conversions']:
                         self.backup(file, backup_type="converted")
@@ -459,6 +488,7 @@ class LibraryConverter:
 
             self.set_library_permissions()
             self.empty_tmp_con_dir()
+            gc.collect()
             self.current_book += 1
             continue
 
@@ -482,13 +512,18 @@ class LibraryConverter:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     env=self.calibre_env,
-                    text=True
+                    text=True,
+                    preexec_fn=_set_conversion_limits if os.name != 'nt' else None
                 ) as process:
-                    for line in process.stdout: # Read from the combined stdout (which includes stderr)
-                        if self.verbose:
-                            print_and_log(line)
-                        else:
-                            print(line)
+                    watchdog = _kill_after(process, _CONVERSION_TIMEOUT)
+                    try:
+                        for line in process.stdout: # Read from the combined stdout (which includes stderr)
+                            if self.verbose:
+                                print_and_log(line)
+                            else:
+                                print(line)
+                    finally:
+                        watchdog.cancel()
 
                 if self.cwa_settings['auto_backup_conversions']:
                     self.backup(filepath, backup_type="converted")
@@ -508,13 +543,18 @@ class LibraryConverter:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    encoding='utf-8'
+                    encoding='utf-8',
+                    preexec_fn=_set_conversion_limits if os.name != 'nt' else None
                 ) as process:
-                    for line in process.stdout: # Read from the combined stdout (which includes stderr)
-                        if self.verbose:
-                            print_and_log(line)
-                        else:
-                            print(line)
+                    watchdog = _kill_after(process, _CONVERSION_TIMEOUT)
+                    try:
+                        for line in process.stdout: # Read from the combined stdout (which includes stderr)
+                            if self.verbose:
+                                print_and_log(line)
+                            else:
+                                print(line)
+                    finally:
+                        watchdog.cancel()
 
                 if self.cwa_settings['auto_backup_conversions']:
                     self.backup(filepath, backup_type="converted")

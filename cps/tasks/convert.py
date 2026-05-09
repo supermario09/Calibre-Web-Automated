@@ -13,6 +13,9 @@ from markupsafe import escape
 from time import time
 from uuid import uuid4
 
+# Per-book conversion timeout in seconds. Configurable via env var (default 10 min).
+_CONVERSION_TIMEOUT = int(os.environ.get('CWA_CONVERSION_TIMEOUT', '600'))
+
 from sqlalchemy.exc import SQLAlchemyError
 from flask_babel import lazy_gettext as N_
 
@@ -214,10 +217,11 @@ class TaskConvert(CalibreTask):
         quotes = [1, 3]
         command = [config.config_kepubifypath, filename, '-o', temp_file_path, '-i']
         try:
-            p = process_open(command, quotes)
+            p = process_open(command, quotes, limit_memory=True)
         except OSError as e:
             return 1, N_("Kepubify-converter failed: %(error)s", error=e)
         self.progress = 0.01
+        deadline = time() + _CONVERSION_TIMEOUT
         while True:
             nextline = p.stdout.readlines()
             nextline = [x.strip('\n') for x in nextline if x != '\n']
@@ -225,6 +229,10 @@ class TaskConvert(CalibreTask):
                 log.debug(line)
             if p.poll() is not None:
                 break
+            if time() > deadline:
+                p.kill()
+                p.wait()
+                return 1, N_("Kepubify timed out after %(seconds)d seconds", seconds=_CONVERSION_TIMEOUT)
 
         # process returncode
         check = p.returncode
@@ -308,11 +316,16 @@ class TaskConvert(CalibreTask):
                             command.append(parsed)
                             quotes.append(quotes_index)
                             quotes_index += 1
-            p = process_open(command, quotes, newlines=False)
+            p = process_open(command, quotes, newlines=False, limit_memory=True)
         except OSError as e:
             return 1, N_("Ebook-converter failed: %(error)s", error=e)
 
+        deadline = time() + _CONVERSION_TIMEOUT
         while p.poll() is None:
+            if time() > deadline:
+                p.kill()
+                p.wait()
+                return 1, N_("ebook-convert timed out after %(seconds)d seconds", seconds=_CONVERSION_TIMEOUT)
             nextline = p.stdout.readline()
             if isinstance(nextline, bytes):
                 nextline = nextline.decode('utf-8', errors="ignore").strip('\r\n')

@@ -10,7 +10,21 @@ import os
 import subprocess
 import re
 
-def process_open(command, quotes=(), env=None, sout=subprocess.PIPE, serr=subprocess.PIPE, newlines=True):
+# Cap virtual memory per ebook-convert process. Configurable via env var (default 1500 MB).
+# Keeps a runaway conversion from OOM-killing the whole container on a memory-constrained NAS.
+_CONVERSION_MEMORY_BYTES = int(os.environ.get('CWA_CONVERSION_MEMORY_MB', '1500')) * 1024 * 1024
+
+
+def _set_conversion_limits():
+    """Preexec hook: applied in the child process before exec on Linux only."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (_CONVERSION_MEMORY_BYTES, _CONVERSION_MEMORY_BYTES))
+    except Exception:
+        pass
+
+
+def process_open(command, quotes=(), env=None, sout=subprocess.PIPE, serr=subprocess.PIPE, newlines=True, limit_memory=False):
     # Linux py2.7 encode as list without quotes no empty element for parameters
     # linux py3.x no encode and as list without quotes no empty element for parameters
     # windows py2.7 encode as string with quotes empty element for parameters is okay
@@ -24,7 +38,8 @@ def process_open(command, quotes=(), env=None, sout=subprocess.PIPE, serr=subpro
     else:
         exc_command = [x for x in command]
 
-    return subprocess.Popen(exc_command, shell=False, stdout=sout, stderr=serr, universal_newlines=newlines, env=env) # nosec
+    preexec = _set_conversion_limits if (limit_memory and os.name != 'nt') else None
+    return subprocess.Popen(exc_command, shell=False, stdout=sout, stderr=serr, universal_newlines=newlines, env=env, preexec_fn=preexec) # nosec
 
 
 def process_wait(command, serr=subprocess.PIPE, pattern=""):
