@@ -531,13 +531,14 @@
                                             <span class="glyphicon glyphicon-phone"></span>
                                         </button>
                                     {% endif %}
-                                    {% if current_user.role_edit() and config.config_converterpath %}
+                                    {% if current_user.role_edit() %}
                                         {% set non_epub = entry.data|rejectattr('format', 'equalto', 'EPUB')|list %}
                                         {% if non_epub %}
                                         <button id="convertToEpubBtn" type="button" class="btn btn-info action-icon-btn"
                                             data-book-id="{{ entry.id }}"
                                             data-book-format="{{ non_epub[0].format }}"
-                                            title="{{ _('Convert to EPUB') }}" aria-label="{{ _('Convert to EPUB') }}">
+                                            title="{{ _('Convert %(fmt)s to EPUB', fmt=non_epub[0].format) }}"
+                                            aria-label="{{ _('Convert to EPUB') }}">
                                             <span class="glyphicon glyphicon-refresh"></span>
                                         </button>
                                         {% endif %}
