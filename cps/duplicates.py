@@ -301,23 +301,33 @@ def select_book_to_keep(books, strategy):
 
 
 def get_unresolved_duplicate_count(user_id=None):
-    """Get count of unresolved duplicate groups for a user
-    
-    Args:
-        user_id: User ID (defaults to current_user.id)
-        
-    Returns:
-        Integer count of unresolved duplicate groups
+    """Get count of unresolved duplicate groups for a user.
+
+    Uses the CWA DB cache instead of a full library scan — the cache is
+    maintained by the duplicate scanner so it's always near-current.
+    Falls back to 0 rather than triggering an expensive scan.
     """
     if user_id is None:
-        user_id = current_user.id
-    
+        try:
+            user_id = current_user.id
+        except Exception:
+            return 0
     try:
-        # Get all duplicate groups
-        duplicate_groups = find_duplicate_books(include_dismissed=False, user_id=user_id)
-        return len(duplicate_groups)
+        with CWA_DB() as cwa_db:
+            cache_data = cwa_db.get_duplicate_cache() or {}
+            cached_groups = cache_data.get('duplicate_groups') or []
+            if not cached_groups:
+                return 0
+            dismissed_hashes = set()
+            try:
+                rows = ub.session.query(ub.DismissedDuplicateGroup.group_hash)\
+                    .filter(ub.DismissedDuplicateGroup.user_id == user_id).all()
+                dismissed_hashes = {r[0] for r in rows}
+            except Exception:
+                pass
+            return sum(1 for g in cached_groups if g.get('group_hash') not in dismissed_hashes)
     except Exception as e:
-        log.error("[cwa-duplicates] Error counting unresolved duplicates: %s", str(e))
+        log.debug("[cwa-duplicates] Error counting unresolved duplicates from cache: %s", str(e))
         return 0
 
 

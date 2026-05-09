@@ -61,6 +61,15 @@ import sys
 sys.path.insert(1, '/app/calibre-web-automated/scripts/')
 from cwa_db import CWA_DB
 
+
+def _log_activity(**kwargs):
+    """Open CWA_DB, log one activity event, and immediately close the connection."""
+    try:
+        with CWA_DB() as db:
+            db.log_activity(**kwargs)
+    except Exception:
+        pass
+
 feature_support = {
     'ldap': bool(services.ldap),
     'goodreads': bool(services.goodreads_support),
@@ -920,20 +929,9 @@ def render_magic_shelf(shelf_id, sort_param, page):
         )
         log.debug(f"Magic shelf {shelf_id} returned {len(books)} books out of {total_count} total")
 
-        # Log activity
-        try:
-            from scripts.cwa_db import CWA_DB
-            cwa_db = CWA_DB()
-            cwa_db.log_activity(
-                user_id=current_user.id,
-                user_name=current_user.name,
-                event_type='MAGIC_SHELF_VIEW',
-                item_id=shelf_id,
-                item_title=shelf.name,
-                extra_data=json.dumps({'shelf_name': shelf.name, 'shelf_type': 'magic'})
-            )
-        except Exception as e:
-            log.error(f"Failed to log magic shelf activity: {e}")
+        _log_activity(user_id=current_user.id, user_name=current_user.name,
+                      event_type='MAGIC_SHELF_VIEW', item_id=shelf_id, item_title=shelf.name,
+                      extra_data=json.dumps({'shelf_name': shelf.name, 'shelf_type': 'magic'}))
 
     except Exception as e:
         log.error(f"Error retrieving books for magic shelf {shelf_id}: {e}")
@@ -1969,21 +1967,11 @@ def send_to_ereader(book_id, book_format, convert):
                        current_user.name, current_user.kindle_mail_subject)
     if result is None:
         ub.update_download(book_id, int(current_user.id))
-        # Track email/send activity
-        try:
-            from scripts.cwa_db import CWA_DB
-            book = calibre_db.get_book(book_id)
-            cwa_db = CWA_DB()
-            cwa_db.log_activity(
-                user_id=int(current_user.id),
-                user_name=current_user.name,
-                event_type='EMAIL',
-                item_id=book_id,
-                item_title=book.title if book else 'Unknown',
-                extra_data=book_format.upper()
-            )
-        except Exception as e:
-            log.debug(f"Failed to log email activity: {e}")
+        _book = calibre_db.get_book(book_id)
+        _log_activity(user_id=int(current_user.id), user_name=current_user.name,
+                      event_type='EMAIL', item_id=book_id,
+                      item_title=_book.title if _book else 'Unknown',
+                      extra_data=book_format.upper())
         response = [{'type': "success", 'message': _("Success! Book queued for sending to %(eReadermail)s",
                                                    eReadermail=current_user.kindle_mail)}]
     else:
@@ -2119,21 +2107,11 @@ def send_to_selected_ereaders(book_id):
 
     if result is None:
         ub.update_download(book_id, int(current_user.id))
-        # Track email/send activity
-        try:
-            from scripts.cwa_db import CWA_DB
-            book = calibre_db.get_book(book_id)
-            cwa_db = CWA_DB()
-            cwa_db.log_activity(
-                user_id=int(current_user.id),
-                user_name=current_user.name,
-                event_type='EMAIL',
-                item_id=book_id,
-                item_title=book.title if book else 'Unknown',
-                extra_data=book_format.upper()
-            )
-        except Exception as e:
-            log.debug(f"Failed to log email activity: {e}")
+        _book = calibre_db.get_book(book_id)
+        _log_activity(user_id=int(current_user.id), user_name=current_user.name,
+                      event_type='EMAIL', item_id=book_id,
+                      item_title=_book.title if _book else 'Unknown',
+                      extra_data=book_format.upper())
         response = [{'type': "success", 'message': _("Success! Book queued for sending to the selected address(es)!")}]
     else:
         response = [{'type': "danger", 'message': _("Oops! There was an error sending book: %(res)s", res=result)}]
@@ -2224,17 +2202,7 @@ def register():
 def handle_login_user(user, remember, message, category):
     login_user(user, remember=remember)
     
-    # Track login activity
-    try:
-        from scripts.cwa_db import CWA_DB
-        cwa_db = CWA_DB()
-        cwa_db.log_activity(
-            user_id=int(user.id),
-            user_name=user.name,
-            event_type='LOGIN'
-        )
-    except Exception as e:
-        log.debug(f"Failed to log login activity: {e}")
+    _log_activity(user_id=int(user.id), user_name=user.name, event_type='LOGIN')
     
     flash(message, category=category)
     [limiter.limiter.storage.clear(k.key) for k in limiter.current_limits]
@@ -2400,21 +2368,8 @@ def login_post():
                 ip_address = request.remote_addr
                 log.warning('LDAP Login failed for user "%s" IP-address: %s', username, ip_address)
                 
-                # Track failed login attempt
-                try:
-                    from scripts.cwa_db import CWA_DB
-                    import json
-                    cwa_db = CWA_DB()
-                    cwa_db.log_activity(
-                        user_id=None,
-                        user_name='Anonymous',
-                        event_type='LOGIN_FAILED',
-                        item_id=None,
-                        item_title=None,
-                        extra_data=json.dumps({'username_attempted': username, 'ip': ip_address, 'method': 'LDAP'})
-                    )
-                except Exception as e:
-                    log.debug(f"Failed to log failed login attempt: {e}")
+                _log_activity(user_id=None, user_name='Anonymous', event_type='LOGIN_FAILED',
+                              extra_data=json.dumps({'username_attempted': username, 'ip': ip_address, 'method': 'LDAP'}))
                 
                 flash(_(u"Wrong Username or Password"), category="error")
             flash(_(u"Wrong Username or Password"), category="error")
@@ -2444,21 +2399,8 @@ def login_post():
             else:
                 log.warning('Login failed for user "{}" IP-address: {}'.format(username, ip_address))
                 
-                # Track failed login attempt
-                try:
-                    from scripts.cwa_db import CWA_DB
-                    import json
-                    cwa_db = CWA_DB()
-                    cwa_db.log_activity(
-                        user_id=None,
-                        user_name='Anonymous',
-                        event_type='LOGIN_FAILED',
-                        item_id=None,
-                        item_title=None,
-                        extra_data=json.dumps({'username_attempted': username, 'ip': ip_address, 'method': 'standard'})
-                    )
-                except Exception as e:
-                    log.debug(f"Failed to log failed login attempt: {e}")
+                _log_activity(user_id=None, user_name='Anonymous', event_type='LOGIN_FAILED',
+                              extra_data=json.dumps({'username_attempted': username, 'ip': ip_address, 'method': 'standard'}))
                 
                 flash(_(u"Wrong Username or Password"), category="error")
     return render_login(username, form.get("password", ""))
@@ -2906,36 +2848,17 @@ def read_book(book_id, book_format):
             log.debug(f"Failed to load KOReader progress for book {book_id}: {e}")
     # Track read activity
     if current_user.is_authenticated:
-        try:
-            from scripts.cwa_db import CWA_DB
-            import json
-            
-            # Detect source of book discovery
-            source = request.args.get('from', 'direct')
-            referer = request.headers.get('Referer', '')
-            if not source or source == 'direct':
-                if '/search' in referer:
-                    source = 'search'
-                elif '/series' in referer:
-                    source = 'series'
-                elif '/author' in referer:
-                    source = 'author'
-                elif '/category' in referer:
-                    source = 'category'
-                elif '/shelf' in referer:
-                    source = 'shelf'
-            
-            cwa_db = CWA_DB()
-            cwa_db.log_activity(
-                user_id=int(current_user.id),
-                user_name=current_user.name,
-                event_type='READ',
-                item_id=book_id,
-                item_title=book.title,
-                extra_data=json.dumps({'format': book_format.upper(), 'source': source})
-            )
-        except Exception as e:
-            log.debug(f"Failed to log read activity: {e}")
+        source = request.args.get('from', 'direct')
+        referer = request.headers.get('Referer', '')
+        if not source or source == 'direct':
+            if '/search' in referer: source = 'search'
+            elif '/series' in referer: source = 'series'
+            elif '/author' in referer: source = 'author'
+            elif '/category' in referer: source = 'category'
+            elif '/shelf' in referer: source = 'shelf'
+        _log_activity(user_id=int(current_user.id), user_name=current_user.name,
+                      event_type='READ', item_id=book_id, item_title=book.title,
+                      extra_data=json.dumps({'format': book_format.upper(), 'source': source}))
     
     if book_format.lower() == "epub":
         log.debug("Start epub reader for %d", book_id)
@@ -3040,8 +2963,8 @@ def show_book(book_id):
             except Exception as e:
                 log.debug(f"Failed to load KOReader progress for book {book_id}: {e}")
 
-        cwa_db = CWA_DB()
-        cwa_settings = cwa_db.cwa_settings
+        with CWA_DB() as cwa_db:
+            cwa_settings = cwa_db.cwa_settings
 
         return render_title_template('detail.html',
                                      entry=entry,

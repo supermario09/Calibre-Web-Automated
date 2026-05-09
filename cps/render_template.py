@@ -143,26 +143,28 @@ def get_cwa_last_notification() -> str:
 
 # Displays a notification to the user that an update for CWA is available, no matter which page they're on
 # Currently set to only display once per calender day
-def cwa_update_notification() -> None:
-    db = CWA_DB()
-    if db.cwa_settings['cwa_update_notifications']:
+def cwa_update_notification(cwa_settings=None) -> None:
+    _db = None
+    if cwa_settings is None:
+        _db = CWA_DB()
+        cwa_settings = _db.cwa_settings
+    try:
+        if not cwa_settings.get('cwa_update_notifications'):
+            return
         current_date = datetime.now().strftime("%Y-%m-%d")
         cwa_last_notification = get_cwa_last_notification()
-        
         if cwa_last_notification == current_date:
             return
-
         update_available, current_version, tag_name = cwa_update_available()
         if update_available:
             message = _(f"⚡🚨 CWA UPDATE AVAILABLE! 🚨⚡ Current - {current_version} | Newest - {tag_name} | To update, just re-pull the image! This message will only display once per day |")
             flash(_(message), category="cwa_update")
             print(f"[cwa-update-notification-service] {message}", flush=True)
-
         with open('/app/cwa_update_notice', 'w') as f:
             f.write(current_date)
-        return
-    else:
-        return
+    finally:
+        if _db is not None:
+            _db.close()
 
 # Notify users once about theme migration to caliBlur
 def theme_migration_notification() -> None:
@@ -192,11 +194,15 @@ def theme_migration_notification() -> None:
 
 
 # Checks if translations are missing for the current language
-def translations_missing_notification() -> None:
-    db = CWA_DB()
-    if db.cwa_settings['contribute_translations_notifications']:
+def translations_missing_notification(cwa_settings=None) -> None:
+    _db = None
+    if cwa_settings is None:
+        _db = CWA_DB()
+        cwa_settings = _db.cwa_settings
+    try:
+        if not cwa_settings.get('contribute_translations_notifications'):
+            return
         lang = str(get_locale())
-        # Skip English as it is the default language
         if lang == 'en':
             return
         po_path = f"cps/translations/{lang}/LC_MESSAGES/messages.po"
@@ -223,9 +229,9 @@ def translations_missing_notification() -> None:
                 print(f"[translation-notification-service] {message}", flush=True)
                 with open(notice_file, 'w') as f:
                     f.write(current_date)
-        return
-    else:
-        return
+    finally:
+        if _db is not None:
+            _db.close()
 
 # Returns the template for rendering and includes the instance name
 def render_title_template(*args, **kwargs):
@@ -237,21 +243,35 @@ def render_title_template(*args, **kwargs):
         }
     except Exception:
         magic_shelf_routes = {"render": False, "create": False}
-    if current_user.role_admin():
+    # Single CWA_DB per render — shared across all notification checks, closed in finally.
+    # Previously 3 separate instances were opened and left for GC on every page load.
+    _render_db = None
+    _render_settings = {}
+    try:
+        _render_db = CWA_DB()
+        _render_settings = _render_db.cwa_settings
+    except Exception:
+        pass
+
+    try:
+        if current_user.role_admin():
+            try:
+                cwa_update_notification(_render_settings)
+            except Exception as e:
+                print(f"[cwa-update-notification-service] The following error occurred when checking for available updates:\n{e}", flush=True)
         try:
-            cwa_update_notification()
+            theme_migration_notification()
         except Exception as e:
-            print(f"[cwa-update-notification-service] The following error occurred when checking for available updates:\n{e}", flush=True)
-    # Notify users about theme migration (once per day)
-    try:
-        theme_migration_notification()
-    except Exception as e:
-        print(f"[theme-migration-notification] Error showing theme migration notification: {e}", flush=True)
-    # Notify any user if translations are missing for their language
-    try:
-        translations_missing_notification()
-    except Exception as e:
-        print(f"[translation-notification-service] The following error occurred when checking for missing translations:\n{e}", flush=True)
+            print(f"[theme-migration-notification] Error showing theme migration notification: {e}", flush=True)
+        try:
+            translations_missing_notification(_render_settings)
+        except Exception as e:
+            print(f"[translation-notification-service] The following error occurred when checking for missing translations:\n{e}", flush=True)
+    finally:
+        if _render_db is not None:
+            _render_db.close()
+            _render_db = None
+
     duplicate_notification = {
         "enabled": False,
         "count": 0,
@@ -261,50 +281,50 @@ def render_title_template(*args, **kwargs):
     }
     try:
         if current_user.is_authenticated and (current_user.role_admin() or current_user.role_edit()):
-            cwa_db = CWA_DB()
-            detection_enabled = cwa_db.cwa_settings.get('duplicate_detection_enabled', 1)
-            notifications_enabled = bool(cwa_db.cwa_settings.get('duplicate_notifications_enabled', 1))
-            if detection_enabled:
-                cache_data = cwa_db.get_duplicate_cache()
-                if cache_data and cache_data.get('duplicate_groups') is not None:
-                    duplicate_groups = cache_data.get('duplicate_groups') or []
-                    try:
-                        dismissed_groups = ub.session.query(ub.DismissedDuplicateGroup.group_hash)\
-                            .filter(ub.DismissedDuplicateGroup.user_id == current_user.id)\
-                            .all()
-                        dismissed_hashes = {row[0] for row in dismissed_groups}
-                        if dismissed_hashes:
-                            duplicate_groups = [
-                                group for group in duplicate_groups
-                                if group.get('group_hash') not in dismissed_hashes
-                            ]
-                    except Exception:
-                        pass
+            with CWA_DB() as cwa_db:
+                detection_enabled = cwa_db.cwa_settings.get('duplicate_detection_enabled', 1)
+                notifications_enabled = bool(cwa_db.cwa_settings.get('duplicate_notifications_enabled', 1))
+                if detection_enabled:
+                    cache_data = cwa_db.get_duplicate_cache()
+                    if cache_data and cache_data.get('duplicate_groups') is not None:
+                        duplicate_groups = cache_data.get('duplicate_groups') or []
+                        try:
+                            dismissed_groups = ub.session.query(ub.DismissedDuplicateGroup.group_hash)\
+                                .filter(ub.DismissedDuplicateGroup.user_id == current_user.id)\
+                                .all()
+                            dismissed_hashes = {row[0] for row in dismissed_groups}
+                            if dismissed_hashes:
+                                duplicate_groups = [
+                                    group for group in duplicate_groups
+                                    if group.get('group_hash') not in dismissed_hashes
+                                ]
+                        except Exception:
+                            pass
 
-                    preview = []
-                    for group in duplicate_groups[:3]:
-                        preview.append({
-                            'title': group.get('title', ''),
-                            'author': group.get('author', ''),
-                            'count': group.get('count', 0),
-                            'hash': group.get('group_hash', '')
-                        })
+                        preview = []
+                        for group in duplicate_groups[:3]:
+                            preview.append({
+                                'title': group.get('title', ''),
+                                'author': group.get('author', ''),
+                                'count': group.get('count', 0),
+                                'hash': group.get('group_hash', '')
+                            })
 
-                    duplicate_notification = {
-                        "enabled": notifications_enabled,
-                        "count": len(duplicate_groups),
-                        "preview": preview,
-                        "cached": True,
-                        "stale": bool(cache_data.get('scan_pending')),
-                    }
-                else:
-                    duplicate_notification = {
-                        "enabled": notifications_enabled,
-                        "count": 0,
-                        "preview": [],
-                        "cached": False,
-                        "stale": True,
-                    }
+                        duplicate_notification = {
+                            "enabled": notifications_enabled,
+                            "count": len(duplicate_groups),
+                            "preview": preview,
+                            "cached": True,
+                            "stale": bool(cache_data.get('scan_pending')),
+                        }
+                    else:
+                        duplicate_notification = {
+                            "enabled": notifications_enabled,
+                            "count": 0,
+                            "preview": [],
+                            "cached": False,
+                            "stale": True,
+                        }
     except Exception as e:
         log.debug("[cwa-duplicates] Failed to build duplicate notification context: %s", str(e))
     try:
