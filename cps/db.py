@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from sqlite3 import OperationalError as sqliteOperationalError
 import sqlite3
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy import Table, Column, ForeignKey, CheckConstraint
 from sqlalchemy import String, Integer, Boolean, TIMESTAMP, Float
 from sqlalchemy.orm import relationship, sessionmaker, scoped_session, joinedload, object_session
@@ -30,7 +30,7 @@ try:
     from sqlalchemy.orm import declarative_base
 except ImportError:
     from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import StaticPool, QueuePool
 from sqlalchemy.sql.expression import and_, true, false, text, func, or_
 from sqlalchemy.ext.associationproxy import association_proxy
 from .cw_login import current_user
@@ -769,11 +769,34 @@ class CalibreDB:
             db_writable = os.access(dbpath, os.W_OK)
 
             try:
+                # Use QueuePool for better multi-threaded performance
+                # pool_size: 5 connections in the pool
+                # max_overflow: Allow up to 10 additional connections beyond pool_size
+                # pool_pre_ping: Test connections before using them (prevents "database is locked" from stale connections)
+                # pool_recycle: Recycle connections after 1 hour to prevent timeouts
                 cls.engine = create_engine('sqlite://',
                                            echo=False,
                                            isolation_level="SERIALIZABLE",
                                            connect_args={'check_same_thread': False, 'timeout': 30},
-                                           poolclass=StaticPool)
+                                           poolclass=QueuePool,
+                                           pool_size=5,
+                                           max_overflow=10,
+                                           pool_pre_ping=True,
+                                           pool_recycle=3600)
+                
+                # Register PRAGMA optimization statements on each connection
+                @event.listens_for(cls.engine, "connect")
+                def sqlite_optimizations(dbapi_conn, connection_record):
+                    """Apply SQLite optimization pragmas for better performance"""
+                    dbapi_conn.execute("PRAGMA journal_mode=WAL")
+                    dbapi_conn.execute("PRAGMA synchronous=NORMAL")  # NORMAL is safer than OFF, allows async writes
+                    dbapi_conn.execute("PRAGMA cache_size=10000")    # 10MB cache for ~10K pages
+                    dbapi_conn.execute("PRAGMA temp_store=MEMORY")   # Use memory for temp tables instead of disk
+                    dbapi_conn.execute("PRAGMA mmap_size=33554432")  # Enable memory-mapped I/O (32MB)
+                    dbapi_conn.execute("PRAGMA busy_timeout=30000")  # 30-second timeout for locked database
+                    dbapi_conn.execute("PRAGMA query_only=False")    # Allow writes
+                    dbapi_conn.execute("PRAGMA foreign_keys=ON")     # Enforce foreign keys
+                
                 with cls.engine.begin() as connection:
                     connection.execute(text("attach database '{}' as calibre;".format(dbpath)))
                     connection.execute(text("attach database '{}' as app_settings;".format(app_db_path)))
@@ -784,11 +807,16 @@ class CalibreDB:
                         if not nsm and db_writable:
                             connection.execute(text("PRAGMA calibre.journal_mode=WAL"))
                             connection.execute(text("PRAGMA app_settings.journal_mode=WAL"))
+                            # Apply optimization pragmas to attached databases
+                            connection.execute(text("PRAGMA calibre.synchronous=NORMAL"))
+                            connection.execute(text("PRAGMA app_settings.synchronous=NORMAL"))
+                            connection.execute(text("PRAGMA calibre.cache_size=10000"))
+                            connection.execute(text("PRAGMA app_settings.cache_size=10000"))
                         else:
                             reason = "NETWORK_SHARE_MODE=true" if nsm else "metadata.db not writable"
                             log.warning("WAL mode disabled for calibre/app_settings (%s)", reason)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning(f"Failed to set optimization pragmas on attached databases: {e}")
 
                 conn = cls.engine.connect()
                 # conn.text_factory = lambda b: b.decode(errors = 'ignore') possible fix for #1302

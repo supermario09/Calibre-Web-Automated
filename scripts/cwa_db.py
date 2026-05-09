@@ -42,6 +42,19 @@ class CWA_DB:
         cur = None
         try:
             con = sqlite3.connect(self.db_path + self.db_file, timeout=30)
+            
+            # Apply SQLite optimization pragmas for better performance
+            cur = con.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")  # NORMAL is safer than OFF
+            cur.execute("PRAGMA cache_size=10000")    # 10MB cache
+            cur.execute("PRAGMA temp_store=MEMORY")   # Use memory for temp tables
+            cur.execute("PRAGMA mmap_size=33554432")  # Enable memory-mapped I/O (32MB)
+            cur.execute("PRAGMA busy_timeout=30000")  # 30-second timeout for locks
+            cur.execute("PRAGMA query_only=False")    # Allow writes
+            cur.execute("PRAGMA foreign_keys=ON")     # Enforce foreign keys
+            con.commit()
+            
         except sqlError as e:
             print(f"[cwa-db]: The following error occurred while trying to connect to the CWA Enforcement DB: {e}")
             sys.exit(0)

@@ -1780,3 +1780,80 @@ def merge_duplicate_group(book_to_keep, books_to_merge):
                                             to_name))
                 existing_formats.append(element.format)
     calibre_db.session.commit()
+
+
+@duplicates.route("/duplicates/batch-delete", methods=["POST"])
+@login_required_if_no_ano
+@admin_or_edit_required
+def batch_delete_duplicates():
+    """
+    Start async batch deletion of selected duplicate books.
+    
+    Processes deletions in configurable batches to avoid memory exhaustion.
+    Returns task ID for progress tracking.
+    """
+    try:
+        data = request.get_json() or {}
+        book_ids = data.get('book_ids', [])
+        batch_size = int(data.get('batch_size', 10))
+        strategy = data.get('strategy', 'newest')
+        group_hash = data.get('group_hash', None)
+        
+        # Validate inputs
+        if not book_ids or not isinstance(book_ids, list):
+            return jsonify({
+                'success': False,
+                'error': _('No books selected for deletion')
+            }), 400
+        
+        book_ids = [int(bid) for bid in book_ids]
+        batch_size = max(1, min(batch_size, 50))  # Clamp between 1 and 50
+        
+        # Verify all books exist
+        calibre_db.ensure_session()
+        invalid_ids = []
+        for book_id in book_ids:
+            if not calibre_db.get_book(book_id):
+                invalid_ids.append(book_id)
+        
+        if invalid_ids:
+            return jsonify({
+                'success': False,
+                'error': _('Some books no longer exist: {}').format(', '.join(str(bid) for bid in invalid_ids[:5]))
+            }), 400
+        
+        # Create and queue the batch deletion task
+        from cps.tasks.batch_duplicate_deletion import TaskBatchDeleteDuplicates
+        from cps.services.worker import WorkerThread
+        
+        task = TaskBatchDeleteDuplicates(
+            book_ids=book_ids,
+            batch_size=batch_size,
+            strategy=strategy,
+            user_id=current_user.id,
+            group_hash=group_hash
+        )
+        
+        worker = WorkerThread.get_instance()
+        if not worker:
+            return jsonify({
+                'success': False,
+                'error': _('Background worker not available')
+            }), 500
+        
+        worker.add_task(task)
+        
+        log.info(f"Queued batch deletion task for {len(book_ids)} books (batch size: {batch_size})")
+        
+        return jsonify({
+            'success': True,
+            'task_id': task.id,
+            'message': _('Batch deletion started. {} books will be deleted in batches of {}').format(len(book_ids), batch_size)
+        })
+    
+    except Exception as e:
+        log.exception(f"Error starting batch deletion: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500

@@ -35,6 +35,7 @@ from sqlalchemy import Column, ForeignKey, Index, UniqueConstraint
 from sqlalchemy import String, Integer, SmallInteger, Boolean, DateTime, Float, JSON
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.expression import func
+from sqlalchemy.pool import QueuePool
 try:
     # Compatibility with sqlalchemy 2.0
     from sqlalchemy.orm import declarative_base
@@ -1242,8 +1243,33 @@ def init_db(app_db_path):
     global app_DB_path
 
     app_DB_path = app_db_path
-    engine = create_engine('sqlite:///{0}'.format(app_db_path), echo=False,
-                           connect_args={'timeout': 30})
+    
+    # Use QueuePool for better multi-threaded performance
+    # pool_size: 5 connections in the pool
+    # max_overflow: Allow up to 10 additional connections beyond pool_size
+    # pool_pre_ping: Test connections before using them
+    # pool_recycle: Recycle connections after 1 hour to prevent timeouts
+    engine = create_engine('sqlite:///{0}'.format(app_db_path), 
+                           echo=False,
+                           connect_args={'timeout': 30},
+                           poolclass=QueuePool,
+                           pool_size=5,
+                           max_overflow=10,
+                           pool_pre_ping=True,
+                           pool_recycle=3600)
+
+    # Register PRAGMA optimization statements on each connection
+    @event.listens_for(engine, "connect")
+    def sqlite_optimizations(dbapi_conn, connection_record):
+        """Apply SQLite optimization pragmas for better performance"""
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        dbapi_conn.execute("PRAGMA synchronous=NORMAL")  # NORMAL is safer than OFF
+        dbapi_conn.execute("PRAGMA cache_size=10000")    # 10MB cache
+        dbapi_conn.execute("PRAGMA temp_store=MEMORY")   # Use memory for temp tables
+        dbapi_conn.execute("PRAGMA mmap_size=33554432")  # Enable memory-mapped I/O (32MB)
+        dbapi_conn.execute("PRAGMA busy_timeout=30000")  # 30-second timeout
+        dbapi_conn.execute("PRAGMA query_only=False")    # Allow writes
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")     # Enforce foreign keys
 
     Session = scoped_session(sessionmaker())
     Session.configure(bind=engine)
@@ -1313,8 +1339,28 @@ def password_change(user_credentials=None):
 
 
 def get_new_session_instance():
-    new_engine = create_engine('sqlite:///{0}'.format(app_DB_path), echo=False,
-                               connect_args={'timeout': 30})
+    new_engine = create_engine('sqlite:///{0}'.format(app_DB_path), 
+                               echo=False,
+                               connect_args={'timeout': 30},
+                               poolclass=QueuePool,
+                               pool_size=5,
+                               max_overflow=10,
+                               pool_pre_ping=True,
+                               pool_recycle=3600)
+    
+    # Apply SQLite optimizations
+    @event.listens_for(new_engine, "connect")
+    def sqlite_optimizations(dbapi_conn, connection_record):
+        """Apply SQLite optimization pragmas for better performance"""
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        dbapi_conn.execute("PRAGMA synchronous=NORMAL")
+        dbapi_conn.execute("PRAGMA cache_size=10000")
+        dbapi_conn.execute("PRAGMA temp_store=MEMORY")
+        dbapi_conn.execute("PRAGMA mmap_size=33554432")
+        dbapi_conn.execute("PRAGMA busy_timeout=30000")
+        dbapi_conn.execute("PRAGMA query_only=False")
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+    
     new_session = scoped_session(sessionmaker())
     new_session.configure(bind=new_engine)
 

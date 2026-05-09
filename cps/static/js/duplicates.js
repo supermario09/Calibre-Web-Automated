@@ -28,14 +28,17 @@ $(document).ready(function() {
         if (count === 0) {
             $('#selection_count').text('0 BOOKS SELECTED');
             $('#delete_selected').addClass('disabled').attr('aria-disabled', true);
+            $('#batch_delete_selected').addClass('disabled').attr('aria-disabled', true);
             $('.merge-selected-btn').addClass('disabled').attr('aria-disabled', true);
         } else if (count === 1) {
             $('#selection_count').text('1 BOOK SELECTED');
             $('#delete_selected').removeClass('disabled').attr('aria-disabled', false);
+            $('#batch_delete_selected').removeClass('disabled').attr('aria-disabled', false);
             $('.merge-selected-btn').addClass('disabled').attr('aria-disabled', true);
         } else {
             $('#selection_count').text(count + ' BOOKS SELECTED');
             $('#delete_selected').removeClass('disabled').attr('aria-disabled', false);
+            $('#batch_delete_selected').removeClass('disabled').attr('aria-disabled', false);
             $('.merge-selected-btn').removeClass('disabled').attr('aria-disabled', false);
         }
     }
@@ -634,6 +637,102 @@ $(document).ready(function() {
         $('#resolution_preview_body').html(html);
         $('#resolution_preview_modal').modal('show');
     }
+    
+    // Batch Delete button
+    $('#batch_delete_selected').click(function(event) {
+        if ($(this).hasClass('disabled')) {
+            event.stopPropagation();
+        } else {
+            if (selectedBooks.length === 0) {
+                $('#error_modal_message').text("No books selected! Please select books to batch delete.");
+                $('#error_modal').modal('show');
+                return;
+            }
+            
+            // Populate the batch delete modal with book list
+            $('#batch_delete_book_list').empty();
+            selectedBooks.forEach(function(bookId) {
+                $("<div style='padding: 5px 0; border-bottom: 1px solid #333;'>" + 
+                  "Book ID: <strong>" + bookId + "</strong></div>").appendTo('#batch_delete_book_list');
+            });
+            
+            // Set default batch size
+            $('#batch_size_input').val(10);
+            
+            // Show modal
+            $('#batch_delete_modal').modal('show');
+        }
+    });
+    
+    // Confirm batch delete
+    $('#batch_delete_confirm').click(function() {
+        var batchSize = parseInt($('#batch_size_input').val()) || 10;
+        
+        if (batchSize < 1 || batchSize > 50) {
+            alert('Batch size must be between 1 and 50');
+            return;
+        }
+        
+        if (selectedBooks.length === 0) {
+            alert('No books selected');
+            return;
+        }
+        
+        // Call the batch delete endpoint
+        var batchDeleteUrl = window.location.pathname + '/../batch-delete';
+        
+        // Convert book IDs to integers
+        var bookIds = selectedBooks.map(function(id) { return parseInt(id, 10); });
+        
+        var batchDeleteData = {
+            'book_ids': bookIds,
+            'batch_size': batchSize,
+            'strategy': $('#resolution_strategy').val() || 'newest'
+        };
+        
+        $.ajax({
+            method: 'post',
+            contentType: 'application/json; charset=utf-8',
+            dataType: 'json',
+            url: batchDeleteUrl,
+            data: JSON.stringify(batchDeleteData),
+            beforeSend: function(xhr) {
+                if (csrfToken) {
+                    xhr.setRequestHeader('X-CSRFToken', csrfToken);
+                }
+            },
+            success: function(response) {
+                if (response.success) {
+                    // Close the modal
+                    $('#batch_delete_modal').modal('hide');
+                    
+                    // Show success message
+                    $('#success_modal_message').text(
+                        'Batch deletion started! Task ID: ' + response.task_id + '\n\n' +
+                        response.message + '\n\nYou can monitor progress in the Tasks panel.'
+                    );
+                    $('#success_modal').modal('show');
+                    
+                    // Clear selections after starting deletion
+                    $('#select_none').click();
+                } else {
+                    // Show error
+                    $('#error_modal_message').text('Error: ' + (response.error || 'Unknown error'));
+                    $('#error_modal').modal('show');
+                }
+            },
+            error: function(xhr, status, error) {
+                $('#error_modal_message').text('An error occurred while starting batch deletion. Status: ' + xhr.status);
+                $('#error_modal').modal('show');
+                console.error('[CWA Duplicates] Batch delete error:', error);
+            }
+        });
+    });
+    
+    // Abort batch delete
+    $('#batch_delete_abort').click(function() {
+        $('#batch_delete_modal').modal('hide');
+    });
     
     function escapeHtml(text) {
         var map = {

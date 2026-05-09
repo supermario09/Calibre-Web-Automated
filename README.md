@@ -121,6 +121,43 @@ This tells CWA to avoid enabling WAL on the Calibre `metadata.db` and the `app.d
 - **Why this matters**: Session protection validates requests based on the client's IP address. If ProxyFix doesn't trust enough proxies, it may see different IPs between requests, causing "Session protection triggered" warnings and forcing re-login.
 - **Troubleshooting**: If you see frequent session protection warnings in logs, check your proxy chain depth and adjust this variable accordingly.
 
+### Database Performance Optimization & Large Library Support
+
+#### Memory Allocation for Large Libraries
+
+Since CWA v4.5+, the following optimizations are **automatically enabled**:
+
+- **Connection Pooling**: SQLite uses QueuePool with 5 base connections + 10 overflow (reduces lockups)
+- **Database Pragmas**: WAL mode, 10MB cache, 32MB memory-mapped I/O, 30-second busy timeout
+- **Batch Operations**: Large duplicate deletions and bulk conversions process in batches to avoid OOM
+
+**For NAS/16GB+ systems**, allocate adequate Docker memory to handle bulk operations:
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 8G          # Maximum allowed
+    reservations:
+      memory: 4G          # Reserved for guaranteed availability
+```
+
+**Why this matters**: Deleting 1000+ duplicate books or converting entire libraries without memory limits causes container OOM kills and "database is locked" errors. With pooling + batching + memory allocation, operations complete reliably.
+
+#### Batch Deletion for Large Duplicate Sets
+
+When dealing with 50+ duplicates:
+1. Use **Batch Delete** button (⚡) instead of single Delete to process in batches
+2. Set batch size to 10-20 for a 16GB NAS (conservative settings)
+3. Monitor progress in the **Tasks** panel
+4. Batch deletion prevents both memory exhaustion and database locks
+
+**Troubleshooting "Database Locked" errors**:
+1. Ensure `NETWORK_SHARE_MODE=true` only if on NFS/SMB
+2. Allocate minimum 4GB Docker memory (recommended 8GB for large libraries)
+3. Use Batch Delete for 50+ items instead of bulk operations
+4. Check `/tmp/*.lock` files - if stale locks exist, delete them and restart
+
 ## **_Features:_**
 
 ### CWA supports all Stock CW Features:
@@ -171,7 +208,18 @@ This tells CWA to avoid enabling WAL on the Calibre `metadata.db` and the `app.d
 #### **Smart Duplicate Detection System & Management** 🔍
 - Hybrid SQL + fuzzy matching detects duplicates missed by traditional scans
 - Post-ingest checks and scheduled incremental scans
-- One-click merge, batch operations, and optional auto-resolution
+- One-click merge, batch operations, and optional auto-resolution with multiple strategies:
+  - **Keep Newest**: Delete older copies, keep the most recently added
+  - **Keep Oldest**: Delete newer copies, keep the earliest added
+  - **Merge Formats**: Merge formats into the newest book, delete the rest
+  - **Highest Quality Format**: Keep based on your Duplicate Format Priority Ranking
+  - **Most Metadata**: Keep book with most complete information
+  - **Largest File Size**: Keep book with largest total file size
+- **Batch Deletion** ⚡ for handling large duplicate sets:
+  - Process duplicates in configurable batch sizes to avoid memory exhaustion
+  - Automatic progress tracking with cancellation support
+  - Recommended for 50+ duplicate books at once
+  - Prevents "database locked" errors and container OOM kills
 - Configurable matching rules, thresholds, and format awareness
 
 ![](https://github.com/crocodilestick/Calibre-Web-Automated/blob/main/README_images/duplicate-detection-system.gif?raw=true)
