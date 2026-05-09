@@ -11,7 +11,7 @@ from sqlalchemy import func
 from flask_babel import lazy_gettext as N_
 
 from cps import calibre_db, db, logger
-from cps.duplicates import find_duplicate_books_python, find_duplicate_candidate_ids_sql
+from cps.duplicates import find_duplicate_books_python, find_duplicate_candidate_ids_sql, filter_dismissed_groups
 from cps.services.worker import CalibreTask, STAT_CANCELLED, STAT_ENDED
 from cps.ub import init_db_thread
 
@@ -72,17 +72,17 @@ class TaskDuplicateScan(CalibreTask):
                 return
 
             if self.full_scan:
-                duplicate_groups = find_duplicate_books(include_dismissed=False, user_id=self.user_id)
+                # Single scan with include_dismissed=True; filter in Python for
+                # the unresolved count — avoids a second full library scan.
+                all_groups = find_duplicate_books(include_dismissed=True, user_id=self.user_id)
+                duplicate_groups = filter_dismissed_groups(all_groups, self.user_id)
                 self.result_count = len(duplicate_groups)
-                
+
                 # Store the duplicate groups for passing to auto-resolution
                 self.found_duplicate_groups = duplicate_groups
 
                 if self.stat in (STAT_CANCELLED, STAT_ENDED):
                     return
-
-                # Update cache with full results (including dismissed groups)
-                all_groups = find_duplicate_books(include_dismissed=True, user_id=self.user_id)
 
                 max_book_id = 0
                 try:
@@ -112,11 +112,10 @@ class TaskDuplicateScan(CalibreTask):
                     log.warning("[cwa-duplicates] Incremental scan prefilter unavailable; falling back to full scan")
                     print("[cwa-duplicates] Incremental scan prefilter unavailable; falling back to full scan", flush=True)
 
-                    duplicate_groups = find_duplicate_books(include_dismissed=False, user_id=self.user_id)
+                    all_groups = find_duplicate_books(include_dismissed=True, user_id=self.user_id)
+                    duplicate_groups = filter_dismissed_groups(all_groups, self.user_id)
                     self.result_count = len(duplicate_groups)
                     self.found_duplicate_groups = duplicate_groups
-
-                    all_groups = find_duplicate_books(include_dismissed=True, user_id=self.user_id)
 
                     max_book_id = 0
                     try:

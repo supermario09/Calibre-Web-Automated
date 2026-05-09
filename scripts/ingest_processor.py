@@ -1160,30 +1160,35 @@ class NewBookProcessor:
         in Calibre-Web until container restart.
         """
         url = get_internal_api_url("/cwa-internal/reconnect-db")
-        # Flask can be momentarily saturated during heavy ingest — retry with backoff
-        # before giving up. The endpoint itself returns in <100ms once Flask is free.
-        delays = [2, 5, 10]
-        for attempt, delay in enumerate(delays, start=1):
+        # Fire-and-forget: this is a QoL feature, not critical. A missed refresh just
+        # means the user sees the book on next page reload. Keep timeout short so
+        # the ingest lock is never held for more than a few seconds on this call.
+        # Only retry on ConnectionError (server down) — ReadTimeout means Flask is
+        # consistently busy and re-trying at 5s each will only make things worse.
+        for attempt in range(1, 3):  # max 2 attempts
             try:
-                print(f"[ingest-processor] Refreshing Calibre-Web database session (attempt {attempt})...", flush=True)
+                print(f"[ingest-processor] Refreshing Calibre-Web database session...", flush=True)
                 resp = requests.post(
                     url,
                     headers=get_internal_api_headers(),
-                    timeout=30,
+                    timeout=5,
                     verify=False,
                 )
                 if resp.status_code == 200:
                     print("[ingest-processor] Database session refresh enqueued", flush=True)
                     return
-                print(f"[ingest-processor] WARN: DB refresh endpoint returned {resp.status_code}", flush=True)
+                print(f"[ingest-processor] INFO: DB refresh returned {resp.status_code}", flush=True)
                 return
-            except Exception as e:
-                if attempt < len(delays):
-                    print(f"[ingest-processor] WARN: DB refresh attempt {attempt} failed ({e}), retrying in {delay}s...", flush=True)
-                    time.sleep(delay)
+            except requests.exceptions.ConnectionError as e:
+                if attempt < 2:
+                    print(f"[ingest-processor] INFO: DB refresh connection error, retrying in 2s...", flush=True)
+                    time.sleep(2)
                 else:
-                    print(f"[ingest-processor] WARN: Failed to call DB refresh endpoint after {len(delays)} attempts: {e}", flush=True)
-                    print("[ingest-processor] Continuing despite session refresh failure - books may require manual refresh", flush=True)
+                    print(f"[ingest-processor] INFO: DB refresh skipped (server unreachable): {type(e).__name__}", flush=True)
+            except Exception:
+                # ReadTimeout or other — Flask is busy; skip rather than block ingest
+                print("[ingest-processor] INFO: DB refresh skipped (server busy) - books will appear on next page reload", flush=True)
+                return
 
 
     def invalidate_duplicate_cache(self) -> None:
@@ -1197,7 +1202,7 @@ class NewBookProcessor:
             resp = requests.post(
                 url,
                 headers=get_internal_api_headers(),
-                timeout=30,
+                timeout=5,
                 verify=False,
             )
             if resp.status_code == 200:
@@ -1232,7 +1237,7 @@ class NewBookProcessor:
                     url,
                     json=payload,
                     headers=get_internal_api_headers(),
-                    timeout=30,
+                    timeout=5,
                     verify=False,
                 )
                 if resp.status_code == 200:

@@ -10,11 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Duplicates page cache-based fast path**: When `scan_pending=0` in the CWA DB cache (no new books since last scan), the `/duplicates` page now reconstructs groups from the cache instead of re-scanning the entire library. Fetches only the known-duplicate book IDs (a small fraction of the library) with a single query + `selectinload`. Falls back to full scan if cache reconstruction fails. Page loads are now near-instant on repeat visits between ingests.
+
 - **Performance indexes on Calibre DB hot columns**: `CREATE INDEX IF NOT EXISTS` applied on startup for `calibre.authors(sort)`, `calibre.data(book)`, and `calibre.books(author_sort)`. Eliminates full-table scans on queries that run on every page render and every duplicate scan.
 
 - **Duplicate groups pagination**: The `/duplicates` page now loads groups in pages of 25 (configurable: 10 / 25 / 50 / 100 via a per-page selector). Previously all groups were rendered at once, causing slow JS and a "Select All" that would select every book in the entire library. Now "Select Duplicates (this page)" is scoped to the current page only, keeping DOM size and selection state manageable. Pagination controls (prev / next / first / last / per-page selector) are shown when there is more than one page. The route accepts `?page=N&per_page=N` query params.
 
 ### Fixed
+
+- **`scripts/ingest_processor.py` — ingest lock blocked for 97s by refresh retries**: Previous fix changed the `reconnect-db` timeout from 5s to 30s and added 3 retries. When Flask was consistently busy, all 3 attempts timed out at 30s each = 97s of ingest lock held per book. Reverted to 5s timeout (fire-and-forget). Only `ConnectionError` (server truly down) is retried once; `ReadTimeout` (Flask busy) now fails immediately since retrying won't help. `invalidate-cache` and `queue-duplicate-scan` also reverted to 5s. Log level downgraded from WARN to INFO for these non-critical skips.
+
+- **`cps/tasks/duplicate_scan.py` — double full library scan on every trigger**: The full-scan path called `find_duplicate_books(include_dismissed=False)` then `find_duplicate_books(include_dismissed=True)` — two complete library scans per trigger. Now calls once with `include_dismissed=True` and filters dismissed groups in Python via `filter_dismissed_groups()`. Same fix applied to the incremental-scan fallback path.
+
+- **`cps/static/js/duplicates.js`** — scan progress polling interval reduced from 2s to 5s, cutting server requests by 60% during long scans.
 
 - **`cps/db.py` — `order_authors()` crash + N+1 rewrite**: Fixed `AttributeError: 'NoneType' object has no attribute 'id'` crash on the homepage/book list when the Calibre DB has orphaned author sort values. Simultaneously rewrote the function to use two bulk `.in_()` queries (one for all sort values, one fallback for any unmatched IDs) instead of one query per author per book. On a 20k book library this reduces author queries from O(N×M) to O(1). All `None` results from the DB are now guarded.
 

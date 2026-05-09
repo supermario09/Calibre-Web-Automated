@@ -49,6 +49,78 @@ _AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 _AWARE_MAX = datetime.max.replace(tzinfo=timezone.utc)
 
 
+def _load_groups_from_cache(cache_data, user_id):
+    """Reconstruct full group dicts from the serialized CWA DB cache.
+
+    Fetches only the books that are known duplicates (much smaller set than
+    the full library), so page load is fast when no new books have arrived.
+    Returns None if reconstruction fails so the caller falls back to a full scan.
+    """
+    import json
+    try:
+        raw = cache_data.get('duplicate_groups_json')
+        if not raw:
+            return None
+        cached_groups = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(cached_groups, list):
+            return None
+
+        # Collect all book IDs across all cached groups
+        all_book_ids = []
+        for group in cached_groups:
+            all_book_ids.extend(group.get('book_ids', []))
+        if not all_book_ids:
+            return []
+
+        # Single query for just the duplicate books with relationships eager-loaded
+        books_by_id = {}
+        for book in (calibre_db.session.query(db.Books)
+                     .options(
+                         selectinload(db.Books.authors),
+                         selectinload(db.Books.data),
+                         selectinload(db.Books.series),
+                         selectinload(db.Books.languages),
+                         selectinload(db.Books.publishers),
+                     )
+                     .filter(db.Books.id.in_(all_book_ids))
+                     .all()):
+            books_by_id[book.id] = book
+
+        duplicate_groups = []
+        for cached_group in cached_groups:
+            book_ids = cached_group.get('book_ids', [])
+            books = [books_by_id[bid] for bid in book_ids if bid in books_by_id]
+            if len(books) < 2:
+                continue  # group no longer valid (books deleted since last scan)
+
+            books.sort(key=lambda x: _timestamp_or_default(x.timestamp, _AWARE_MIN), reverse=True)
+            calibre_db.order_authors(books, list_return=True)
+
+            for book in books:
+                if book.ordered_authors:
+                    book.author_names = ', '.join(
+                        a.name.replace('|', ',') for a in book.ordered_authors if a and a.name
+                    )
+                else:
+                    book.author_names = 'Unknown'
+                book.cover_url = (f"/cover/{book.id}" if book.has_cover
+                                  else "/static/generic_cover.svg")
+
+            duplicate_groups.append({
+                'title': cached_group.get('title', books[0].title or 'Untitled'),
+                'author': cached_group.get('author', 'Unknown'),
+                'count': len(books),
+                'books': books,
+                'group_hash': cached_group.get('group_hash', ''),
+            })
+
+        return duplicate_groups
+
+    except Exception as e:
+        log.warning("[cwa-duplicates] Cache reconstruction failed (%s); falling back to full scan", str(e))
+        return None
+
+
 def admin_or_edit_required(f):
     """Decorator that allows access to admins or users with edit role"""
     @wraps(f)
@@ -288,26 +360,39 @@ def show_duplicates():
     per_page = request.args.get('per_page', _DUPLICATES_PER_PAGE_DEFAULT, type=int)
     per_page = max(_DUPLICATES_PER_PAGE_MIN, min(_DUPLICATES_PER_PAGE_MAX, per_page))
 
-    print("[cwa-duplicates] Loading duplicates page...", flush=True)
     log.info("[cwa-duplicates] Loading duplicates page for user: %s", current_user.name)
+    user_id = current_user.id if current_user else None
 
     try:
-        all_groups = find_duplicate_books(include_dismissed=True)
-        duplicate_groups = filter_dismissed_groups(all_groups, current_user.id if current_user else None)
+        cwa_db = CWA_DB()
+        cache_data = cwa_db.get_duplicate_cache() or {}
+        scan_pending = int(cache_data.get('scan_pending', 1))
 
-        # Update cache so notifications reflect the latest scan
-        try:
-            max_book_id = 0
+        all_groups = None
+        if scan_pending == 0 and cache_data.get('duplicate_groups_json'):
+            # Cache is fresh — reconstruct from stored book IDs instead of
+            # re-scanning the whole library on every page load.
+            all_groups = _load_groups_from_cache(cache_data, user_id)
+            if all_groups is not None:
+                log.debug("[cwa-duplicates] Served %d groups from cache (scan_pending=0)", len(all_groups))
+
+        if all_groups is None:
+            # Cache stale or reconstruction failed — full scan
+            all_groups = find_duplicate_books(include_dismissed=True)
+            # Refresh cache so next page load can use the fast path
             try:
-                max_id_result = calibre_db.session.query(func.max(db.Books.id)).scalar()
-                max_book_id = max_id_result if max_id_result is not None else 0
-            except Exception as max_ex:
-                log.warning("[cwa-duplicates] Could not get max book ID for cache update: %s", str(max_ex))
-            cwa_db_cache = CWA_DB()
-            cwa_db_cache.update_duplicate_cache(all_groups, len(all_groups), max_book_id)
-            log.debug("[cwa-duplicates] Cache updated from /duplicates page load")
-        except Exception as cache_ex:
-            log.warning("[cwa-duplicates] Failed to update cache from /duplicates page: %s", str(cache_ex))
+                max_book_id = 0
+                try:
+                    max_id_result = calibre_db.session.query(func.max(db.Books.id)).scalar()
+                    max_book_id = max_id_result if max_id_result is not None else 0
+                except Exception as max_ex:
+                    log.warning("[cwa-duplicates] Could not get max book ID for cache update: %s", str(max_ex))
+                cwa_db.update_duplicate_cache(all_groups, len(all_groups), max_book_id)
+                log.debug("[cwa-duplicates] Cache updated from full scan on /duplicates page load")
+            except Exception as cache_ex:
+                log.warning("[cwa-duplicates] Failed to update cache from /duplicates page: %s", str(cache_ex))
+
+        duplicate_groups = filter_dismissed_groups(all_groups, user_id)
 
         cwa_db = CWA_DB()
         next_scan_run = get_next_duplicate_scan_run(cwa_db.cwa_settings)

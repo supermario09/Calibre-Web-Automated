@@ -37,24 +37,38 @@ def _read_ingest_source():
 class TestRefreshSourceGuarantees:
     """Verify the source of refresh_cwa_session has the expected properties."""
 
-    def test_timeout_is_30_not_5_in_all_internal_calls(self):
-        """All three internal API calls must use timeout=30, not the old 5s."""
+    def test_refresh_uses_short_timeout(self):
+        """refresh_cwa_session must use a short (≤5s) fire-and-forget timeout.
+
+        A long timeout (e.g. 30s) × retries blocks the ingest lock for 90+s,
+        serialising the entire ingest queue. The refresh is QoL-only.
+        """
         src = _read_ingest_source()
-        methods = [
-            'def refresh_cwa_session',
-            'def invalidate_duplicate_cache',
-            'def schedule_debounced_duplicate_scan',
-        ]
-        for method in methods:
+        start = src.index('def refresh_cwa_session')
+        snippet = src[start:start + 1500]
+        assert 'timeout=5' in snippet, (
+            "refresh_cwa_session must use timeout=5 — it is fire-and-forget, "
+            "a long timeout blocks the ingest lock"
+        )
+        assert 'timeout=30' not in snippet
+
+    def test_no_readtimeout_retry_in_refresh(self):
+        """ReadTimeout must not be retried — Flask busy means retries also time out."""
+        src = _read_ingest_source()
+        start = src.index('def refresh_cwa_session')
+        snippet = src[start:start + 1500]
+        assert 'ConnectionError' in snippet, \
+            "refresh_cwa_session should only retry on ConnectionError, not ReadTimeout"
+
+    def test_all_fire_and_forget_endpoints_use_short_timeout(self):
+        """invalidate_duplicate_cache and schedule_debounced_duplicate_scan must use timeout=5."""
+        src = _read_ingest_source()
+        for method in ('def invalidate_duplicate_cache', 'def schedule_debounced_duplicate_scan'):
             start = src.index(method)
-            snippet = src[start:start + 1500]
-            assert 'timeout=30' in snippet, (
-                f"{method} must use timeout=30 — 5s is too short when "
-                "Flask is saturated during heavy ingest."
-            )
-            assert 'timeout=5' not in snippet, (
-                f"{method} still has timeout=5 — must be 30"
-            )
+            end = src.index('\n    def ', start + 1)
+            fn_body = src[start:end]
+            assert 'timeout=5' in fn_body, f"{method} must use timeout=5"
+            assert 'timeout=30' not in fn_body
 
     def test_retry_loop_present(self):
         src = _read_ingest_source()
@@ -64,13 +78,16 @@ class TestRefreshSourceGuarantees:
             "refresh_cwa_session must have a retry loop"
         )
 
-    def test_sleep_between_retries(self):
+    def test_sleeps_only_on_connection_error(self):
+        """sleep must appear in the ConnectionError handler, not on ReadTimeout."""
         src = _read_ingest_source()
         start = src.index('def refresh_cwa_session')
-        snippet = src[start:start + 1500]
-        assert 'time.sleep' in snippet, (
-            "refresh_cwa_session must sleep between retry attempts"
-        )
+        end = src.index('\n    def ', start + 1)
+        fn_body = src[start:end]
+        assert 'time.sleep' in fn_body, \
+            "refresh_cwa_session must sleep between ConnectionError retries"
+        assert 'ConnectionError' in fn_body, \
+            "sleep must only be in the ConnectionError handler"
 
     def test_no_bare_raise(self):
         """Method must never propagate — always warn and continue."""
@@ -88,27 +105,24 @@ class TestRefreshSourceGuarantees:
 
 def _refresh_cwa_session_impl(requests_mod, time_mod, get_url, get_headers):
     """
-    Inline recreation of the refresh_cwa_session retry logic.
+    Inline recreation of the refresh_cwa_session logic.
     Mirrors the actual implementation so behavioural tests stay in sync.
+    Only retries on ConnectionError; ReadTimeout fails fast (fire-and-forget).
     """
     url = get_url("/cwa-internal/reconnect-db")
-    delays = [2, 5, 10]
-    for attempt, delay in enumerate(delays, start=1):
+    for attempt in range(1, 3):  # max 2 attempts
         try:
-            resp = requests_mod.post(
-                url,
-                headers=get_headers(),
-                timeout=30,
-                verify=False,
-            )
+            resp = requests_mod.post(url, headers=get_headers(), timeout=5, verify=False)
             if resp.status_code == 200:
                 return
-            # non-200: warn but don't retry
+            return  # non-200: log and give up
+        except requests.exceptions.ConnectionError:
+            if attempt < 2:
+                time_mod.sleep(2)
+            # final attempt: give up silently
+        except Exception:
+            # ReadTimeout or other: fail fast, don't retry
             return
-        except Exception as e:
-            if attempt < len(delays):
-                time_mod.sleep(delay)
-            # on final attempt: warn and continue (no raise)
 
 
 class TestRefreshRetryBehaviour:
@@ -131,29 +145,37 @@ class TestRefreshRetryBehaviour:
         mock_req.post.assert_called_once()
         mock_time.sleep.assert_not_called()
 
-    def test_timeout_per_call_is_30s(self):
+    def test_timeout_per_call_is_5s(self):
+        """Fire-and-forget: must use 5s timeout to not block the ingest lock."""
         resp = MagicMock(); resp.status_code = 200
         mock_req, _ = self._run([resp])
         _, kwargs = mock_req.post.call_args
-        assert kwargs['timeout'] == 30
+        assert kwargs['timeout'] == 5
 
-    def test_retries_on_read_timeout_succeeds_second_attempt(self):
+    def test_readtimeout_fails_fast_no_retry(self):
+        """ReadTimeout must not be retried — Flask busy → retry also times out."""
+        mock_req, mock_time = self._run([
+            requests.exceptions.ReadTimeout("timed out"),
+        ])
+        mock_req.post.assert_called_once()
+        mock_time.sleep.assert_not_called()
+
+    def test_connection_error_retried_once(self):
+        """ConnectionError (server down) is worth one retry."""
         resp = MagicMock(); resp.status_code = 200
         mock_req, mock_time = self._run([
-            requests.exceptions.ReadTimeout("t/o"),
+            requests.exceptions.ConnectionError("refused"),
             resp,
         ])
         assert mock_req.post.call_count == 2
         mock_time.sleep.assert_called_once()
 
-    def test_exhausts_three_attempts_without_raising(self):
-        mock_req, mock_time = self._run([
-            requests.exceptions.ConnectionError("refused"),
+    def test_exhausts_connection_retries_without_raising(self):
+        mock_req, _ = self._run([
             requests.exceptions.ConnectionError("refused"),
             requests.exceptions.ConnectionError("refused"),
         ])
-        assert mock_req.post.call_count == 3
-        assert mock_time.sleep.call_count == 2  # sleep between attempts 1→2 and 2→3
+        assert mock_req.post.call_count == 2  # max 2 attempts
 
     def test_non_200_returns_without_retry(self):
         resp = MagicMock(); resp.status_code = 503

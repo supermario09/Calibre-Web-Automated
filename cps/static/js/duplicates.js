@@ -412,7 +412,7 @@ $(document).ready(function() {
 
     function pollScanProgress(taskId, btn) {
         activeScanTaskId = taskId;
-        const pollInterval = 2000;
+        const pollInterval = 5000;
         function pollOnce() {
             $.ajax({
                 url: '/duplicates/scan-progress/' + taskId,
