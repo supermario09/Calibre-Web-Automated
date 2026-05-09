@@ -523,13 +523,16 @@
                                         {% endif %}
                                     {% endif %}
                                     {% endif %}
-                                    {% if current_user.wireless_device_ip and entry.data|length %}
+                                    {% if current_user.wireless_device_ip %}
+                                        {% set epub_formats = entry.data|selectattr('format', 'equalto', 'EPUB')|list %}
+                                        {% if epub_formats %}
                                         <button id="sendWirelessBtn" type="button" class="btn btn-success action-icon-btn"
                                             data-book-id="{{ entry.id }}"
-                                            data-book-format="{{ entry.data[0].format }}"
-                                            title="{{ _('Send to Device (WiFi)') }}" aria-label="{{ _('Send to Device (WiFi)') }}">
+                                            data-book-format="EPUB"
+                                            title="{{ _('Send to Device (WiFi) — EPUB') }}" aria-label="{{ _('Send to Device (WiFi)') }}">
                                             <span class="glyphicon glyphicon-phone"></span>
                                         </button>
+                                        {% endif %}
                                     {% endif %}
                                     {% if current_user.role_edit() %}
                                         {% set non_epub = entry.data|rejectattr('format', 'equalto', 'EPUB')|list %}
