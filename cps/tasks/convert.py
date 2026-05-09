@@ -304,6 +304,14 @@ class TaskConvert(CalibreTask):
                     quotes.append(6)
                     command.extend(['--cover', os.path.join(os.path.dirname(file_path), 'cover.jpg')])
                     quotes_index = 7
+            elif has_cover:
+                # Always embed cover even when full metadata embedding is off —
+                # cover.jpg is a standard Calibre artefact, independent of OPF metadata.
+                cover_path = os.path.join(os.path.dirname(file_path), 'cover.jpg')
+                if os.path.isfile(cover_path):
+                    quotes.append(quotes_index)
+                    command.extend(['--cover', cover_path])
+                    quotes_index += 1
             if config.config_calibre:
                 parameters = re.findall(r"(--[\w-]+)(?:(\s(?:(\".+\")|(?:.+?)))(?:\s|$))?",
                                         config.config_calibre, re.IGNORECASE | re.UNICODE)

@@ -2022,10 +2022,11 @@ def send_wireless(book_id, book_format):
         import time
         filename = book_data.name + "." + book_format.lower()
         file_size = os.path.getsize(book_file_path)
+        import select
         chunk_size = 1024  # 1KB chunks — ESP32 needs small writes with time to flush to SD card
 
         ws = websocket.WebSocket()
-        ws.settimeout(20)
+        ws.settimeout(30)
         ws.connect(f"ws://{device_ip}:81/")
 
         ws.send(f"START:{filename}:{file_size}:/")
@@ -2035,13 +2036,31 @@ def send_wireless(book_id, book_format):
             response = [{'type': "danger", 'message': _("Device not ready: %(reply)s", reply=reply)}]
             return Response(json.dumps(response), mimetype='application/json')
 
+        def drain_incoming(ws_conn):
+            """Drain any PROGRESS/status messages the device sends mid-transfer.
+            Prevents the socket receive buffer from filling up and stalling the send loop."""
+            try:
+                raw_sock = ws_conn.sock.sock if hasattr(ws_conn.sock, 'sock') else ws_conn.sock
+                while select.select([raw_sock], [], [], 0)[0]:
+                    msg = ws_conn.recv()
+                    log.debug("Wireless device: %s", msg)
+            except Exception:
+                pass
+
         with open(book_file_path, 'rb') as f:
+            bytes_sent = 0
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
                 ws.send_binary(chunk)
+                bytes_sent += len(chunk)
                 time.sleep(0.02)  # 20ms delay for ESP32 SD card buffer
+                # Drain PROGRESS messages every 50KB to prevent buffer overflow
+                if bytes_sent % (50 * 1024) < chunk_size:
+                    drain_incoming(ws)
+
+        drain_incoming(ws)  # final drain before waiting for completion ACK
 
         try:
             final_ack = ws.recv()
