@@ -212,6 +212,33 @@ def convert_bookformat(book_id):
     return redirect(url_for('edit-book.show_edit_book', book_id=book_id))
 
 
+@editbook.route("/ajax/convert_to_epub/<int:book_id>", methods=['POST'])
+@login_required_if_no_ano
+@edit_required
+def ajax_convert_to_epub(book_id):
+    """Queue an on-the-fly conversion to EPUB for a single book. Returns JSON."""
+    from flask import jsonify
+    book_format_from = request.form.get('book_format_from', '').upper()
+    if not book_format_from:
+        return jsonify({"success": False, "message": _("Source format missing")}), 400
+
+    if not config.config_converterpath:
+        return jsonify({"success": False, "message": _("Calibre converter not configured")}), 400
+
+    err = helper.convert_book_format(
+        book_id, config.get_book_path(),
+        book_format_from, 'EPUB',
+        current_user.name
+    )
+    if err:
+        return jsonify({"success": False, "message": str(err)}), 500
+    return jsonify({
+        "success": True,
+        "message": _("Queued conversion from %(fmt)s to EPUB — check the Tasks panel for progress",
+                     fmt=book_format_from)
+    })
+
+
 @editbook.route("/ajax/getcustomenum/<int:c_id>")
 @user_login_required
 def table_get_custom_enum(c_id):

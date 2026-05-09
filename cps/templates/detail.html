@@ -531,6 +531,17 @@
                                             <span class="glyphicon glyphicon-phone"></span>
                                         </button>
                                     {% endif %}
+                                    {% if current_user.role_edit() and config.config_converterpath %}
+                                        {% set non_epub = entry.data|rejectattr('format', 'equalto', 'EPUB')|list %}
+                                        {% if non_epub %}
+                                        <button id="convertToEpubBtn" type="button" class="btn btn-info action-icon-btn"
+                                            data-book-id="{{ entry.id }}"
+                                            data-book-format="{{ non_epub[0].format }}"
+                                            title="{{ _('Convert to EPUB') }}" aria-label="{{ _('Convert to EPUB') }}">
+                                            <span class="glyphicon glyphicon-refresh"></span>
+                                        </button>
+                                        {% endif %}
+                                    {% endif %}
                                     {% if entry.reader_list and current_user.role_viewer() %}
                                         <a target="_blank"
                                            href="{{ url_for('web.read_book', book_id=entry.id, book_format=entry.reader_list[0]) }}"
@@ -1353,6 +1364,32 @@
                     cancelEdit();
                 }
             });
+        });
+    });
+
+    // Convert to EPUB (on-the-fly, single book)
+    $("#convertToEpubBtn").on("click", function () {
+        var btn = $(this);
+        var bookId = btn.data("book-id");
+        var bookFormat = btn.data("book-format");
+        btn.prop("disabled", true);
+        $.ajax({
+            method: "POST",
+            url: "{{ url_for('edit-book.ajax_convert_to_epub', book_id=0) }}".replace("/0", "/" + bookId),
+            data: {
+                book_format_from: bookFormat,
+                csrf_token: $("input[name='csrf_token']").val()
+            },
+            success: function (data) {
+                showActionToast(data.message, btn[0]);
+                btn.prop("disabled", false);
+            },
+            error: function (xhr) {
+                var msg = "{{ _('Conversion failed') }}";
+                try { msg = JSON.parse(xhr.responseText).message || msg; } catch(e) {}
+                showActionToast(msg, btn[0]);
+                btn.prop("disabled", false);
+            }
         });
     });
 
