@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`cps/static/js/duplicates.js`**: Batch delete (and Delete Selected) button remained disabled even after selecting books, because clicking a book card did not register a selection — only clicking the tiny checkbox directly worked. Added a `.book-item` click handler that toggles the checkbox and fires its `change` event, so clicking anywhere on a book card now selects it and enables the action buttons.
+
 - **`cps/db.py` (author sort loop)**: When an `author_sort` value (e.g. `"The New Yorker   Apr 04, 2005"`) has no matching row in the `Authors.sort` column, the code now `continue`s to the next author instead of `break`ing out of the loop. Previously `break` would silently abandon all remaining authors, causing incorrect display ordering for multi-author books. Log level downgraded from `log.error` → `log.debug` — these are permanent data quality issues (magazines/periodicals with date-based author sorts) that are handled gracefully and cannot be actioned, so they must not flood production logs at warning/error level.
 
 - **`scripts/ingest_processor.py`**: Increased timeout on all three internal API calls from 5 s to 30 s (`refresh_cwa_session`, `invalidate_duplicate_cache`, `schedule_debounced_duplicate_scan`). Flask can be momentarily saturated during heavy ingest, causing read timeouts that were logged as warnings and silently skipped the DB refresh. Added retry-with-backoff (3 attempts: 2 s, 5 s, 10 s) to `refresh_cwa_session` so a transient busy-server doesn't permanently miss the refresh. The other two endpoints continue to fail gracefully without retry since they are fully fire-and-forget.

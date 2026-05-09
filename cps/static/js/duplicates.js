@@ -54,7 +54,14 @@ $(document).ready(function() {
         });
     }
     
-    // Handle individual checkbox changes  
+    // Clicking anywhere on a book card toggles its checkbox
+    $(document).on('click', '.book-item', function(event) {
+        if ($(event.target).is('.book-checkbox')) return; // checkbox click handled below
+        var checkbox = $(this).find('.book-checkbox');
+        checkbox.prop('checked', !checkbox.prop('checked')).trigger('change');
+    });
+
+    // Handle individual checkbox changes
     $(document).on('change', '.book-checkbox', function() {
         var bookId = $(this).val();
         
