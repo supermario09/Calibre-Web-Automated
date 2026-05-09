@@ -816,17 +816,19 @@ class CalibreDB:
                     # Ensure performance indexes exist on hot query columns.
                     # CREATE INDEX IF NOT EXISTS is safe to run on every startup.
                     try:
+                        # SQLite schema qualifier goes on the index name, not the table:
+                        # CREATE INDEX schema.index_name ON table(col)
                         connection.execute(text(
-                            "CREATE INDEX IF NOT EXISTS cwa_idx_authors_sort "
-                            "ON calibre.authors(sort)"
+                            "CREATE INDEX IF NOT EXISTS calibre.cwa_idx_authors_sort "
+                            "ON authors(sort)"
                         ))
                         connection.execute(text(
-                            "CREATE INDEX IF NOT EXISTS cwa_idx_data_book "
-                            "ON calibre.data(book)"
+                            "CREATE INDEX IF NOT EXISTS calibre.cwa_idx_data_book "
+                            "ON data(book)"
                         ))
                         connection.execute(text(
-                            "CREATE INDEX IF NOT EXISTS cwa_idx_books_author_sort "
-                            "ON calibre.books(author_sort)"
+                            "CREATE INDEX IF NOT EXISTS calibre.cwa_idx_books_author_sort "
+                            "ON books(author_sort)"
                         ))
                     except Exception as e:
                         log.warning(f"Failed to create performance indexes: {e}")

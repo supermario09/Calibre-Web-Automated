@@ -131,18 +131,18 @@ class TestDBIndexesInSetupDb:
 
     def test_index_on_authors_sort(self):
         src = _read('cps/db.py')
-        assert 'cwa_idx_authors_sort' in src
-        assert 'ON calibre.authors(sort)' in src
+        assert 'calibre.cwa_idx_authors_sort' in src
+        assert 'ON authors(sort)' in src
 
     def test_index_on_data_book(self):
         src = _read('cps/db.py')
-        assert 'cwa_idx_data_book' in src
-        assert 'ON calibre.data(book)' in src
+        assert 'calibre.cwa_idx_data_book' in src
+        assert 'ON data(book)' in src
 
     def test_index_on_books_author_sort(self):
         src = _read('cps/db.py')
-        assert 'cwa_idx_books_author_sort' in src
-        assert 'ON calibre.books(author_sort)' in src
+        assert 'calibre.cwa_idx_books_author_sort' in src
+        assert 'ON books(author_sort)' in src
 
     def test_indexes_use_if_not_exists(self):
         src = _read('cps/db.py')
