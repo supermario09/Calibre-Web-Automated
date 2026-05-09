@@ -127,9 +127,10 @@ This tells CWA to avoid enabling WAL on the Calibre `metadata.db` and the `app.d
 
 Since CWA v4.5+, the following optimizations are **automatically enabled**:
 
-- **Connection Pooling**: SQLite uses QueuePool with 5 base connections + 10 overflow (reduces lockups)
+- **Connection Pooling**: SQLite uses StaticPool for the in-memory engine (required for ATTACH DATABASE) and QueuePool for app.db (reduces lockups on concurrent requests)
 - **Database Pragmas**: WAL mode, 10MB cache, 32MB memory-mapped I/O, 30-second busy timeout
 - **Batch Operations**: Large duplicate deletions and bulk conversions process in batches to avoid OOM
+- **Conversion Resource Limits**: Each `ebook-convert`/`kepubify` process is capped at 1500 MB virtual memory and killed after 10 minutes, preventing a single conversion from OOM-killing the container
 
 **For NAS/16GB+ systems**, allocate adequate Docker memory to handle bulk operations:
 
@@ -157,6 +158,23 @@ When dealing with 50+ duplicates:
 2. Allocate minimum 4GB Docker memory (recommended 8GB for large libraries)
 3. Use Batch Delete for 50+ items instead of bulk operations
 4. Check `/tmp/*.lock` files - if stale locks exist, delete them and restart
+
+#### Conversion Resource Limits (OOM Prevention)
+
+`ebook-convert` can spike to 1-2 GB RAM per book. On memory-constrained NAS systems, large or back-to-back conversions can OOM-kill the entire container. CWA now applies two safeguards to every conversion process:
+
+- **Memory cap**: Each `ebook-convert` / `kepubify` subprocess is limited to 1500 MB virtual memory via `RLIMIT_AS`. If the process exceeds this, it is killed by the OS — the container stays up and the task is marked failed.
+- **Timeout**: Any conversion that runs longer than 10 minutes is killed and the task fails cleanly.
+
+Both limits are configurable via environment variables:
+
+```yaml
+environment:
+  - CWA_CONVERSION_MEMORY_MB=1500   # per ebook-convert process (default: 1500)
+  - CWA_CONVERSION_TIMEOUT=600      # seconds before kill (default: 600 = 10 min)
+```
+
+Increase `CWA_CONVERSION_MEMORY_MB` if you have headroom and are converting very large PDFs or complex formats. Reduce it on systems with less than 8 GB container memory.
 
 ## **_Features:_**
 
