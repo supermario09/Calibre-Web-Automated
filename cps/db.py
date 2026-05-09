@@ -1122,7 +1122,7 @@ class CalibreDB:
                     continue
                 results = self.session.query(Authors).filter(Authors.sort == auth).all()
                 if not len(results):
-                    log.warning("Author sort '{}' not in Authors table; skipping sort for this entry".format(auth))
+                    log.debug("Author sort '{}' not in Authors table; skipping sort for this entry".format(auth))
                     continue
                 for r in results:
                     if r.id in ids:

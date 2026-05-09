@@ -54,11 +54,11 @@ class TestAuthorSortLoopFix:
             "Old ERROR log message still present — should have been replaced with warning"
         )
 
-    def test_warning_log_present(self):
-        """A warning-level log must exist for missing author sort values."""
+    def test_debug_log_present(self):
+        """A debug-level log must exist for missing author sort values."""
         src = _read_db_source()
         assert 'not in Authors table; skipping sort for this entry' in src, (
-            "Expected warning log for unmatched author sort not found"
+            "Expected debug log for unmatched author sort not found"
         )
 
     def test_continue_not_break_after_missing_author(self):
@@ -67,19 +67,20 @@ class TestAuthorSortLoopFix:
         marker = 'not in Authors table; skipping sort for this entry'
         assert marker in src
 
-        # Find the block containing the warning
         idx = src.index(marker)
-        # Look at the ~200 chars after the warning for break vs continue
         after = src[idx:idx + 200]
-        assert 'continue' in after, "Expected `continue` after warning — `break` abandons remaining authors"
+        assert 'continue' in after, "Expected `continue` after log — `break` abandons remaining authors"
         assert 'break' not in after, "`break` still present — must be `continue`"
 
-    def test_no_bare_error_log_for_author_sort(self):
-        """No log.error calls should reference author sort lookup failure."""
+    def test_no_error_or_warning_log_for_author_sort(self):
+        """Author sort mismatch is a data quality issue — must be debug only, not error/warn."""
         src = _read_db_source()
-        # Check there's no error-level log in the author sort section
         sort_section_start = src.index('sort_authors = ')
         sort_section = src[sort_section_start:sort_section_start + 800]
         assert 'log.error' not in sort_section, (
-            "log.error found in author sort section — should be log.warning"
+            "log.error found in author sort section — must be log.debug"
+        )
+        assert 'log.warning' not in sort_section, (
+            "log.warning found in author sort section — must be log.debug (these are permanent "
+            "data quality issues that flood production logs)"
         )
