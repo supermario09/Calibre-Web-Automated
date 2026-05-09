@@ -44,8 +44,15 @@ services:
     restart: unless-stopped
     ulimits:
       nofile:
-        soft: 65536
+        soft: 65536    # prevent "too many open files" from unclosed DB connections
         hard: 65536
+      nproc:
+        soft: 32768    # allow enough processes for concurrent ingest + conversion subprocesses
+        hard: 32768
+    tmpfs:
+      - /tmp:size=1g   # ebook-convert writes heavily to /tmp; RAM-backed = faster conversions
+    sysctls:
+      net.core.somaxconn: 1024   # larger accept queue for gevent under concurrent page loads
     # Memory allocation for handling large library operations and duplicate deletes
     # Set to 8GB for a 16GB NAS as recommended for stable performance
     deploy:
