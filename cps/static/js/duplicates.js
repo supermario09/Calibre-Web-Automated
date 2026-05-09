@@ -700,7 +700,7 @@ $(document).ready(function() {
         }
         
         // Call the batch delete endpoint
-        var batchDeleteUrl = window.location.pathname + '/../batch-delete';
+        var batchDeleteUrl = '/duplicates/batch-delete';
         
         // Convert book IDs to integers
         var bookIds = selectedBooks.map(function(id) { return parseInt(id, 10); });
