@@ -769,20 +769,15 @@ class CalibreDB:
             db_writable = os.access(dbpath, os.W_OK)
 
             try:
-                # Use QueuePool for better multi-threaded performance
-                # pool_size: 5 connections in the pool
-                # max_overflow: Allow up to 10 additional connections beyond pool_size
-                # pool_pre_ping: Test connections before using them (prevents "database is locked" from stale connections)
-                # pool_recycle: Recycle connections after 1 hour to prevent timeouts
+                # Must use StaticPool with in-memory SQLite: all "connections" share the same
+                # underlying connection, so ATTACH DATABASE statements (calibre, app_settings)
+                # are visible across the pool. QueuePool would give each connection its own
+                # isolated in-memory DB, breaking all queries on non-attaching connections.
                 cls.engine = create_engine('sqlite://',
                                            echo=False,
                                            isolation_level="SERIALIZABLE",
                                            connect_args={'check_same_thread': False, 'timeout': 30},
-                                           poolclass=QueuePool,
-                                           pool_size=5,
-                                           max_overflow=10,
-                                           pool_pre_ping=True,
-                                           pool_recycle=3600)
+                                           poolclass=StaticPool)
                 
                 # Register PRAGMA optimization statements on each connection
                 @event.listens_for(cls.engine, "connect")
