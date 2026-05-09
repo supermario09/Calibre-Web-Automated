@@ -129,12 +129,27 @@ Since CWA v4.5+, the following optimizations are **automatically enabled**:
 
 - **Connection Pooling**: SQLite uses StaticPool for the in-memory engine (required for ATTACH DATABASE) and QueuePool for app.db (reduces lockups on concurrent requests)
 - **Database Pragmas**: WAL mode, 10MB cache, 32MB memory-mapped I/O, 30-second busy timeout
+- **Performance Indexes**: `authors(sort)`, `data(book)`, and `books(author_sort)` indexes created at startup via `CREATE INDEX IF NOT EXISTS` — eliminates full-table scans on hot query columns
+- **Bulk Author Ordering**: `order_authors()` uses two bulk `.in_()` queries instead of one query per author per book (O(N×M) → O(1))
+- **Eager Loading**: Duplicate scan uses `selectinload` for all book relationships — 5 queries instead of up to 100k lazy-load queries on a 20k-book library
 - **Batch Operations**: Large duplicate deletions and bulk conversions process in batches to avoid OOM
 - **Conversion Resource Limits**: Each `ebook-convert`/`kepubify` process is capped at 1500 MB virtual memory and killed after 10 minutes, preventing a single conversion from OOM-killing the container
+- **File Descriptor Management**: `CWA_DB` connections are explicitly closed after each use via context manager and `__del__` — prevents `Too many open files` crashes during heavy browsing
 
-**For NAS/16GB+ systems**, allocate adequate Docker memory to handle bulk operations:
+**For NAS/16GB+ systems**, add the following to your `docker-compose.yml` for stable performance:
 
 ```yaml
+ulimits:
+  nofile:
+    soft: 65536    # prevent "too many open files" errors
+    hard: 65536
+  nproc:
+    soft: 32768    # allow enough processes for concurrent ingest + conversion
+    hard: 32768
+tmpfs:
+  - /tmp:size=1g   # RAM-backed temp dir — faster ebook-convert operations
+sysctls:
+  net.core.somaxconn: 1024   # larger accept queue for concurrent page loads
 deploy:
   resources:
     limits:

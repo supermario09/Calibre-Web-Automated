@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`CWA_DB` connection lifecycle management** (`scripts/cwa_db.py`): Added `close()`, `__del__`, and `__enter__`/`__exit__` so SQLite connections are released immediately rather than relying on GC. Previously every `CWA_DB()` instantiation leaked a file descriptor until garbage collected; under gevent with rapid page loads these accumulated until hitting the OS limit and crashing with `OSError: [Errno 24] Too many open files`.
+
+- **`_log_activity()` helper** (`cps/web.py`): All six activity-logging call sites (magic shelf, email, wireless send, login, failed login, read) now use a single `_log_activity()` helper that opens `CWA_DB`, logs one event, and closes the connection — replacing six separate unclosed `CWA_DB()` instances per request path.
+
+- **Docker container resource limits** (`docker-compose.yml`): Added `ulimits.nofile=65536`, `ulimits.nproc=32768`, `tmpfs /tmp:size=1g`, and `sysctls net.core.somaxconn=1024`. The tmpfs gives `ebook-convert` a RAM-backed temp dir (measurably faster conversions); the socket sysctl prevents dropped connections under load.
+
+- **Per-book EPUB conversion button** (`cps/templates/detail.html`, `cps/editbooks.py`): Blue ⟳ button on book detail pages with non-EPUB formats. Queues conversion, shows spinning progress, auto-reloads page when complete (polls `/ajax/emailstat` by task ID). WiFi send button restricted to EPUB-only.
+
+- **Cover always embedded in EPUB conversion** (`cps/tasks/convert.py`): `--cover cover.jpg` is now passed to `ebook-convert` even when "Embed Metadata" is disabled in settings, as long as the book has a cover. Previously the cover was only embedded when the full metadata embed option was on.
+
 - **Duplicates page cache-based fast path**: When `scan_pending=0` in the CWA DB cache (no new books since last scan), the `/duplicates` page now reconstructs groups from the cache instead of re-scanning the entire library. Fetches only the known-duplicate book IDs (a small fraction of the library) with a single query + `selectinload`. Falls back to full scan if cache reconstruction fails. Page loads are now near-instant on repeat visits between ingests.
 
 - **Performance indexes on Calibre DB hot columns**: `CREATE INDEX IF NOT EXISTS` applied on startup for `calibre.authors(sort)`, `calibre.data(book)`, and `calibre.books(author_sort)`. Eliminates full-table scans on queries that run on every page render and every duplicate scan.
@@ -33,6 +43,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`cps/db.py` (author sort loop)**: When an `author_sort` value (e.g. `"The New Yorker   Apr 04, 2005"`) has no matching row in the `Authors.sort` column, the code now `continue`s to the next author instead of `break`ing out of the loop. Previously `break` would silently abandon all remaining authors, causing incorrect display ordering for multi-author books. Log level downgraded from `log.error` → `log.debug` — these are permanent data quality issues (magazines/periodicals with date-based author sorts) that are handled gracefully and cannot be actioned, so they must not flood production logs at warning/error level.
 
 - **`scripts/ingest_processor.py`**: Increased timeout on all three internal API calls from 5 s to 30 s (`refresh_cwa_session`, `invalidate_duplicate_cache`, `schedule_debounced_duplicate_scan`). Flask can be momentarily saturated during heavy ingest, causing read timeouts that were logged as warnings and silently skipped the DB refresh. Added retry-with-backoff (3 attempts: 2 s, 5 s, 10 s) to `refresh_cwa_session` so a transient busy-server doesn't permanently miss the refresh. The other two endpoints continue to fail gracefully without retry since they are fully fire-and-forget.
+
+- **`scripts/ingest_processor.py` — ingest refresh timeout regression fixed**: The previous 30s×3-retry approach blocked the ingest lock for up to 97s per book when Flask was busy. Reverted to 5s fire-and-forget for all three internal endpoints (`reconnect-db`, `invalidate-cache`, `queue-duplicate-scan`). Only `ConnectionError` (server truly down) is retried once; `ReadTimeout` now fails immediately.
+
+- **`cps/duplicates.py` — `get_unresolved_duplicate_count()` full-scan replaced with cache read**: The badge count shown in the sidebar was previously computed by calling `find_duplicate_books()` — a full 20k-book library scan — on every page render. Now reads directly from the CWA DB cache (O(1) lookup with dismissed-group filtering).
+
+- **`cps/render_template.py` — shared `CWA_DB` instance per page render**: `cwa_update_notification()` and `translations_missing_notification()` now accept an optional `cwa_settings` dict. `render_title_template` creates one `CWA_DB`, shares its settings, and closes the connection in a `finally` block — reducing from 3 unclosed connections to 2 properly-closed ones per render.
+
+- **WiFi send — EPUB only, reliable transfer**: Send to Device button now only appears when the book has EPUB format and always sends EPUB. Transfer uses send-all-then-wait with 120s final ACK timeout; `BrokenPipeError` and `WebSocketConnectionClosedException` mid-send are treated as successful completion (device signals done by closing the connection).
 
 - **`cps/db.py`**: Reverted in-memory SQLite engine from `QueuePool` back to `StaticPool`.
   `QueuePool` gives each pool connection its own isolated in-memory database, meaning only
