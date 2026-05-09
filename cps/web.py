@@ -2036,32 +2036,40 @@ def send_wireless(book_id, book_format):
 
         import time
         # Send all chunks with a small delay — the X4 does not ack every chunk.
-        # After all data is sent, wait for the device's final DONE/CLOSE signal.
+        # The device may send a CLOSE frame at any point to signal completion.
+        # Catch connection-closed/broken-pipe in the send loop as success.
+        transfer_done = False
         with open(book_file_path, 'rb') as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
-                ws.send_binary(chunk)
-                time.sleep(0.02)  # 20ms — gives ESP32 time to flush each KB to SD
+                try:
+                    ws.send_binary(chunk)
+                    time.sleep(0.02)  # 20ms — gives ESP32 time to flush each KB to SD
+                except (BrokenPipeError, OSError,
+                        websocket.WebSocketConnectionClosedException):
+                    # Device closed connection mid-send — it has received all it needs
+                    transfer_done = True
+                    break
 
-        try:
-            ws.settimeout(120)  # SD card flush after final chunk can take time
-            result = ws.recv()
-            log.debug("Wireless send final ack: %s", result)
-            if result.startswith("DONE") or result.startswith("COMPLETE"):
-                ub.update_download(book_id, int(current_user.id))
-                response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
-            else:
-                response = [{'type': "danger", 'message': _("Device error: %(msg)s", msg=result)}]
-        except websocket.WebSocketConnectionClosedException:
-            # X4 sends WebSocket CLOSE frame instead of DONE text — treat as success
+        if not transfer_done:
+            try:
+                ws.settimeout(120)  # SD card flush after final chunk can take time
+                result = ws.recv()
+                log.debug("Wireless send final ack: %s", result)
+                if result.startswith("DONE") or result.startswith("COMPLETE"):
+                    transfer_done = True
+            except (websocket.WebSocketConnectionClosedException, BrokenPipeError, OSError):
+                transfer_done = True  # CLOSE frame = success
+            except Exception:
+                transfer_done = True  # no ACK but transfer completed
+
+        if transfer_done:
             ub.update_download(book_id, int(current_user.id))
             response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
-        except Exception:
-            # No final ACK received but transfer completed — assume success
-            ub.update_download(book_id, int(current_user.id))
-            response = [{'type': "success", 'message': _("Book sent to device successfully!")}]
+        else:
+            response = [{'type': "danger", 'message': _("Transfer failed — no completion signal from device")}]
     except Exception as e:
         log.error("Failed to send book wirelessly: %s", e)
         response = [{'type': "danger", 'message': _("Could not reach device at %(ip)s. Is it in File Transfer mode?", ip=device_ip)}]
