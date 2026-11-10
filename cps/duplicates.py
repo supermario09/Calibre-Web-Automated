@@ -1965,9 +1965,9 @@ def batch_delete_duplicates():
                 'success': False,
                 'error': _('Background worker not available')
             }), 500
-        
-        worker.add_task(task)
-        
+
+        WorkerThread.add(current_user.name, task, hidden=False)
+
         log.info(f"Queued batch deletion task for {len(book_ids)} books (batch size: {batch_size})")
         
         return jsonify({

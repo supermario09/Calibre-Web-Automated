@@ -19,6 +19,7 @@ import os
 # Add the cps directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from cps.services.worker import CalibreTask
 from cps.tasks.batch_duplicate_deletion import TaskBatchDeleteDuplicates
 
 
@@ -91,6 +92,14 @@ class TestBatchDeleteDuplicatesTask(unittest.TestCase):
         # Batch 3: [5]
         self.assertEqual(task.total_books, 5)
         self.assertEqual(task.batch_size, 2)
+
+    def test_task_inherits_calibre_task_base(self):
+        """The duplicate-deletion task must use the worker base-class contract."""
+        task = TaskBatchDeleteDuplicates(book_ids=[1, 2], batch_size=2)
+        self.assertIsInstance(task, CalibreTask)
+        self.assertTrue(hasattr(task, "name"))
+        self.assertIn("books deleted", task.message)
+        self.assertEqual(task.stat, 0)
 
 
 class TestBatchDeleteEndpoint(unittest.TestCase):

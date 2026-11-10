@@ -20,7 +20,7 @@ import gc
 sys.path.insert(0, '/app/calibre-web-automated/scripts/')
 from cwa_db import CWA_DB
 
-from . import CalibreTask
+from cps.services.worker import CalibreTask
 from .. import logger, calibre_db, ub, config, helper
 from ..editbooks import delete_whole_book
 from ..db import Books
@@ -50,7 +50,7 @@ class TaskBatchDeleteDuplicates(CalibreTask):
             user_id: User who initiated the deletion (for audit)
             group_hash: Hash of the duplicate group (for audit)
         """
-        super().__init__()
+        super().__init__(_("Batch Delete Duplicates"))
         self.book_ids = list(book_ids) if book_ids else []
         self.total_books = len(self.book_ids)
         self.batch_size = max(1, min(batch_size, 50))  # Clamp between 1 and 50
@@ -65,8 +65,16 @@ class TaskBatchDeleteDuplicates(CalibreTask):
         
         self.title = _("Batch Delete Duplicates ({} books)").format(self.total_books)
         self.message = _("{} of {} books deleted").format(self.deleted_count, self.total_books)
+
+    @property
+    def name(self):
+        return str(_("Batch Delete Duplicates"))
+
+    @property
+    def is_cancellable(self):
+        return True
     
-    def run(self):
+    def run(self, worker_thread=None):
         """Execute batch deletion task"""
         if not self.book_ids:
             self._add_log_entry("No books to delete", level=2)  # Info level

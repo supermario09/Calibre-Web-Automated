@@ -4,3 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # See CONTRIBUTORS for full list of authors.
 
+from cps.services.worker import CalibreTask
+
+__all__ = ["CalibreTask"]
+
