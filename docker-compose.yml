@@ -1,7 +1,7 @@
 ---
 services:
   calibre-web-automated:
-    image: crocodilestick/calibre-web-automated:latest
+    image: supermario09/calibre-web-automated:latest
     container_name: calibre-web-automated
     environment:
       # Only change these if you know what you're doing
