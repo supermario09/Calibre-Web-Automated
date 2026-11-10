@@ -20,7 +20,7 @@ import gc
 sys.path.insert(0, '/app/calibre-web-automated/scripts/')
 from cwa_db import CWA_DB
 
-from cps.services.worker import CalibreTask
+from cps.services.worker import CalibreTask, STAT_CANCELLED, STAT_ENDED
 from .. import logger, calibre_db, ub, config, helper
 from ..editbooks import delete_whole_book
 from ..db import Books
@@ -90,8 +90,8 @@ class TaskBatchDeleteDuplicates(CalibreTask):
         try:
             # Process books in batches
             for batch_idx in range(0, self.total_books, self.batch_size):
-                # Check for cancellation
-                if self.is_canceled:
+                # Check for cancellation using the worker's real task state contract.
+                if self.stat in (STAT_CANCELLED, STAT_ENDED):
                     log.warning("Batch deletion task cancelled by user")
                     self._add_log_entry(_("Batch deletion cancelled by user"), level=2)
                     break

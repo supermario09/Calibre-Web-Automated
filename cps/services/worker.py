@@ -278,6 +278,16 @@ class CalibreTask:
         return self.stat in (STAT_FINISH_SUCCESS, STAT_FAIL, STAT_ENDED, STAT_CANCELLED)
 
     @property
+    def is_canceled(self):
+        """Backward-compatible alias for older task implementations."""
+        return self.stat in (STAT_CANCELLED, STAT_ENDED)
+
+    @property
+    def is_cancelled(self):
+        """Canonical alias for the worker cancellation state."""
+        return self.stat in (STAT_CANCELLED, STAT_ENDED)
+
+    @property
     def self_cleanup(self):
         return self._self_cleanup
 
