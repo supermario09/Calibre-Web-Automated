@@ -101,6 +101,21 @@ class TestBatchDeleteDuplicatesTask(unittest.TestCase):
         self.assertIn("books deleted", task.message)
         self.assertEqual(task.stat, 0)
 
+    def test_run_uses_fractional_progress_values(self):
+        """Batch deletion must report progress on the 0..1 worker scale, not 0..100."""
+        task = TaskBatchDeleteDuplicates(book_ids=[1, 2, 3], batch_size=2)
+
+        def fake_delete_batch(batch_books):
+            task.deleted_count += len(batch_books)
+
+        task._delete_batch = fake_delete_batch
+
+        task.run()
+
+        self.assertEqual(task.deleted_count, 3)
+        self.assertEqual(task.progress, 1.0)
+        self.assertIn("Batch deletion complete", task.message)
+
 
 class TestBatchDeleteEndpoint(unittest.TestCase):
     """Tests for batch delete endpoint"""

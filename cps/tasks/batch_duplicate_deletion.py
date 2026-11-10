@@ -119,8 +119,12 @@ class TaskBatchDeleteDuplicates(CalibreTask):
                 # Force garbage collection between batches to free memory
                 gc.collect()
                 
-                # Update task progress (display percentage)
-                self.progress = (self.deleted_count * 100) // self.total_books
+                # Progress is stored on a 0..1 scale per CalibreTask contract;
+                # UI can translate this to a percent for display. Do not write 0..100.
+                if self.total_books:
+                    self.progress = min(1.0, self.deleted_count / float(self.total_books))
+                else:
+                    self.progress = 0.0
         
         except Exception as e:
             log.exception(f"Batch deletion task failed: {e}")
@@ -148,7 +152,7 @@ class TaskBatchDeleteDuplicates(CalibreTask):
             )
         
         self.message = summary
-        self.progress = 100
+        self.progress = 1.0
     
     def _delete_batch(self, batch_book_ids):
         """
@@ -231,6 +235,10 @@ class TaskBatchDeleteDuplicates(CalibreTask):
                 f"{datetime.now(timezone.utc).isoformat()} [Level {level}] {message}",
                 data_type='json'
             )
+        except SystemExit:
+            # CWA_DB may exit the process when it cannot create its database file.
+            # Treat that as non-fatal for this background task.
+            pass
         except Exception as e:
             log.debug(f"Could not log to CWA DB: {e}")
 
